@@ -1,5 +1,5 @@
 {
-  "name": "Microbe Wars",
-  "description": "A strategic real-time dominance game where you control a microbial colony. Compete against other species to conquer connected settlements in a petri dish.",
+  "name": "微生物战争",
+  "description": "一款策略即时统治游戏，你控制一个微生物群落。与其他物种竞争，征服培养皿中相连的聚落点。",
   "requestFramePermissions": []
 }

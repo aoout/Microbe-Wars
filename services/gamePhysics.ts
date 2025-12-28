@@ -1,16 +1,17 @@
-import { GameWorld, PlayerColor, TravelPayload, ActiveTransfer, Node } from '../types';
+
+import { GameWorld, PlayerColor, TravelPayload, ActiveTransfer, Node, DifficultyLevel } from '../types';
 import { 
   calculateGrowthIncrement, 
   calculateUnitSpeed, 
   calculateAIMoves, 
-  regenerateTopology 
+  regenerateTopology,
+  calculateSpawnInterval
 } from './gameLogic';
 import { 
   TICK_RATE_MS, 
   GROWTH_INTERVAL_MS, 
-  UNIT_SPAWN_INTERVAL_MS, 
-  TRAVEL_SPEED, 
-  AI_ACTION_INTERVAL, 
+  TRAVEL_SPEED_PIXELS, 
+  DIFFICULTY_SETTINGS, 
   OCEAN_CURRENT_INTERVAL_MS,
   PLAYABLE_COLORS
 } from '../constants';
@@ -22,6 +23,9 @@ interface PhysicsContext {
   nextEventTime: number;
   playerColor: PlayerColor;
   gameState: string;
+  difficulty: DifficultyLevel;
+  isPlayerAutoPilot: boolean;
+  tutorialStep: number;
 }
 
 interface PhysicsResult {
@@ -45,7 +49,8 @@ export const advanceGameState = (
   let updatedLastAITime = ctx.lastAITime;
 
   // 1. Ocean Current Event (Topology Change)
-  if (ctx.now >= ctx.nextEventTime) {
+  // DISABLE IN TUTORIAL: Keep map static
+  if (ctx.gameState !== 'TUTORIAL' && ctx.now >= ctx.nextEventTime) {
     newEdges = regenerateTopology(newNodes, newEdges);
     
     // Helper to check connectivity
@@ -67,8 +72,9 @@ export const advanceGameState = (
   // 2. Node Growth
   const baseGrowthPerTick = 1 / (GROWTH_INTERVAL_MS / TICK_RATE_MS); 
   newNodes = newNodes.map(n => {
-    // Neutrals don't grow, max capacity check
-    if (n.owner !== PlayerColor.GRAY && n.count < n.capacity) {
+    // Neutrals don't grow.
+    // Removed the (n.count < n.capacity) check to allow infinite growth.
+    if (n.owner !== PlayerColor.GRAY) {
       const growthIncrement = calculateGrowthIncrement(n.count, baseGrowthPerTick);
       const newAccumulator = (n.growthAccumulator || 0) + growthIncrement;
       
@@ -77,7 +83,8 @@ export const advanceGameState = (
         hasChanges = true;
         return { 
           ...n, 
-          count: Math.min(n.capacity, n.count + wholeNumberGrowth), 
+          // Removed Math.min(n.capacity, ...) to allow infinite growth
+          count: n.count + wholeNumberGrowth, 
           growthAccumulator: newAccumulator - wholeNumberGrowth 
         };
       } else {
@@ -97,8 +104,11 @@ export const advanceGameState = (
     // Stop transfer if ownership changed
     if (sourceNode.owner !== t.owner) return; 
 
+    // Dynamic Interval Logic
+    const dynamicInterval = calculateSpawnInterval(sourceNode.count);
+
     // Time to spawn?
-    if (ctx.now - t.lastSpawnTime > UNIT_SPAWN_INTERVAL_MS) {
+    if (ctx.now - t.lastSpawnTime > dynamicInterval) {
       // Logic for infinite vs fixed amount
       const canSpawn = (t.totalToSend === Infinity || t.sentCount < t.totalToSend) && sourceNode.count >= 1;
       
@@ -106,8 +116,18 @@ export const advanceGameState = (
         // Decrease source
         newNodes[sourceNodeIndex] = { ...sourceNode, count: sourceNode.count - 1 };
         
-        // Create Payload
-        const dynamicSpeed = calculateUnitSpeed(sourceNode.count, TRAVEL_SPEED);
+        // Calculate Absolute Speed
+        const dx = t.endX - t.startX;
+        const dy = t.endY - t.startY;
+        const dist = Math.hypot(dx, dy);
+        
+        // Pixel speed per tick
+        const speedPixels = calculateUnitSpeed(sourceNode.count, TRAVEL_SPEED_PIXELS);
+        
+        // Convert to progress (0-1) per tick: Speed / Distance
+        // If distance is near zero (bug check), default to instantaneous or fast
+        const progressIncrement = dist > 0 ? speedPixels / dist : 0.2;
+
         newPayloads.push({
           id: `p-${t.id}-${Date.now()}-${Math.random()}`,
           sourceId: t.sourceId,
@@ -115,7 +135,7 @@ export const advanceGameState = (
           owner: t.owner,
           count: 1, 
           progress: 0,
-          speed: dynamicSpeed,
+          speed: progressIncrement,
           startX: t.startX,
           startY: t.startY,
           endX: t.endX,
@@ -137,7 +157,12 @@ export const advanceGameState = (
   newTransfers = survivingTransfers;
 
   // 4. AI Logic
-  if (ctx.now - ctx.lastAITime > AI_ACTION_INTERVAL) {
+  const aiInterval = DIFFICULTY_SETTINGS[ctx.difficulty].actionInterval;
+  
+  // Disable AI completely in tutorial
+  const isAIEnabled = ctx.gameState !== 'TUTORIAL';
+
+  if (isAIEnabled && ctx.now - ctx.lastAITime > aiInterval) {
     const tempWorld = { 
       nodes: newNodes, 
       edges: newEdges, 
@@ -145,7 +170,8 @@ export const advanceGameState = (
       transfers: newTransfers 
     };
     
-    const moves = calculateAIMoves(tempWorld, ctx.playerColor);
+    // Pass isPlayerAutoPilot context here
+    const moves = calculateAIMoves(tempWorld, ctx.playerColor, ctx.difficulty, ctx.isPlayerAutoPilot);
     
     if (moves.length > 0) {
       moves.forEach(move => {
@@ -198,10 +224,19 @@ export const advanceGameState = (
     edgeGroups.get(key)!.push(p);
   }
 
-  // Iterate over groups instead of nested loop over all payloads
-  // Reduces complexity from O(Total^2) to roughly O(Edges * (AvgPayloadsPerEdge^2))
+  // Iterate over groups
   for (const group of edgeGroups.values()) {
     if (group.length < 2) continue;
+
+    // Calculate path length once for this group to determine collision threshold in progress units
+    const dx = group[0].endX - group[0].startX;
+    const dy = group[0].endY - group[0].startY;
+    const pathLength = Math.hypot(dx, dy);
+    
+    // We want collision radius of approx 15 pixels.
+    // In progress space (0-1), this is 15 / Length.
+    // Protection against div by zero
+    const collisionThreshold = pathLength > 0 ? 15 / pathLength : 0.05;
 
     for (let i = 0; i < group.length; i++) {
       if (payloadsToRemove.has(group[i].id)) continue;
@@ -217,21 +252,19 @@ export const advanceGameState = (
 
         // Collision logic:
         // p1 and p2 must be moving in opposite directions to collide head-on in this 1D space.
-        // If they are moving same direction, they are just chasing, no collision (unless we add overtaking logic).
         const movingOpposite = p1.sourceId !== p2.sourceId;
         
         if (movingOpposite) {
           // Normalize positions to 0..1 from the perspective of p1's source
-          // p1 is at p1.progress
+          const p1Pos = p1.progress;
           // p2 is at p2.progress from ITS source, which is p1's target.
           // So p2's position relative to p1's source is (1 - p2.progress).
-          
-          const p1Pos = p1.progress;
           const p2Pos = 1 - p2.progress;
-          const dist = Math.abs(p1Pos - p2Pos);
           
-          // Collision threshold
-          if (dist < 0.05) {
+          const distProgress = Math.abs(p1Pos - p2Pos);
+          
+          // Use the absolute-distance calibrated threshold
+          if (distProgress < collisionThreshold) {
             payloadsToRemove.add(p1.id);
             payloadsToRemove.add(p2.id);
             hasChanges = true;

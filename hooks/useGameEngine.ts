@@ -1,17 +1,75 @@
+
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { GameState, GameWorld, PlayerColor, ActiveTransfer } from '../types';
-import { generateMap } from '../services/gameLogic';
+import { GameState, GameWorld, PlayerColor, ActiveTransfer, DifficultyLevel, TutorialStep } from '../types';
+import { generateMap, generateTutorialMap } from '../services/gameLogic';
 import { advanceGameState, checkWinCondition } from '../services/gamePhysics';
 import { TICK_RATE_MS, OCEAN_CURRENT_INTERVAL_MS } from '../constants';
+
+// Define Tutorial Steps
+const TUTORIAL_STEPS: TutorialStep[] = [
+    { 
+      id: 0, 
+      text: "指挥官，系统已上线。当前环境：培养皿 Alpha。未激活的背景节点已过滤。专注执行核心指令。", 
+      requiredAction: 'NEXT' 
+    },
+    { 
+      id: 1, 
+      text: "指令一：建立突触链接。点击选中你的 **母体群落** (蓝色节点)。", 
+      requiredAction: 'SELECT', 
+      targetNodeId: 'tutorial-player' 
+    },
+    { 
+      id: 2, 
+      text: "我们需要生物质来增殖。点击上方的 **中立群落** (灰色)，派遣孢子进行感染。", 
+      requiredAction: 'ATTACK', 
+      targetNodeId: 'tutorial-neutral' 
+    },
+    { 
+      id: 3, 
+      text: "孢子正在突破细胞壁。等待群落完成 **同化**。中立目标是极佳的初期资源。", 
+      requiredAction: 'CAPTURE', 
+      targetNodeId: 'tutorial-neutral' 
+    },
+    { 
+      id: 4, 
+      text: "【生长算法】群落越大，细胞分裂速率越高。尽早扩张以获得指数级资源优势。", 
+      requiredAction: 'NEXT' 
+    },
+    { 
+      id: 5, 
+      text: "【环境警告】培养基极不稳定。注意图中的 **虚线连接**。每 60 秒，洋流会随机重组这些路径。", 
+      requiredAction: 'NEXT' 
+    },
+    { 
+      id: 6, 
+      text: "只有 **实线连接** 是永久固定的神经突触。利用它们构建不可动摇的防线。", 
+      requiredAction: 'NEXT' 
+    },
+    { 
+      id: 7, 
+      text: "【高级战术】按住 **[Ctrl] + 点击** (或长按拖拽) 目标，建立 **持续输送流**。尝试建立补给线。", 
+      requiredAction: 'STREAM', 
+      targetNodeId: 'tutorial-neutral' 
+    },
+    { 
+      id: 8, 
+      text: "高危警报：侦测到敌对红色菌株！运用你所学的一切战术，**彻底根除它**。", 
+      requiredAction: 'WIN', 
+      targetNodeId: 'tutorial-enemy' 
+    }
+];
 
 export const useGameEngine = () => {
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [playerColor, setPlayerColor] = useState<PlayerColor>(PlayerColor.BLUE);
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(3);
   const [winner, setWinner] = useState<PlayerColor | null>(null);
+  const [isPlayerAutoPilot, setIsPlayerAutoPilot] = useState(false);
   
-  // We use a ref for the world state to avoid closure staleness in the game loop
-  // and to allow high-frequency updates without re-rendering every single frame if we chose to throttle.
-  // However, for this game, we sync state every frame for smooth animation.
+  // Tutorial State
+  const [tutorialStep, setTutorialStep] = useState<number>(0);
+  const [hasCompletedTutorial, setHasCompletedTutorial] = useState<boolean>(false);
+
   const worldRef = useRef<GameWorld>({ nodes: [], edges: [], payloads: [], transfers: [] });
   const [renderWorld, setRenderWorld] = useState<GameWorld>(worldRef.current);
   
@@ -21,32 +79,69 @@ export const useGameEngine = () => {
   const nextEventTimeRef = useRef<number>(0);
   const requestRef = useRef<number>(0);
 
-  // Expose next event time for UI (throttled update could be better, but we pass the ref value via state mostly)
   const [nextCurrentTime, setNextCurrentTime] = useState<number>(0);
 
-  const startGame = useCallback(() => {
-    const { nodes, edges } = generateMap(playerColor);
-    const initialWorld = { nodes, edges, payloads: [], transfers: [] };
+  // Load persistence
+  useEffect(() => {
+    const done = localStorage.getItem('microbio_tutorial_completed');
+    if (done === 'true') setHasCompletedTutorial(true);
+  }, []);
+
+  const startGame = useCallback((forceTutorial = false) => {
+    const shouldRunTutorial = forceTutorial || !hasCompletedTutorial;
+
+    let initialWorld;
+    if (shouldRunTutorial) {
+        setGameState('TUTORIAL');
+        setTutorialStep(0);
+        // Force Player Blue in Tutorial for simplicity with text
+        setPlayerColor(PlayerColor.BLUE); 
+        const { nodes, edges } = generateTutorialMap(PlayerColor.BLUE);
+        initialWorld = { nodes, edges, payloads: [], transfers: [] };
+    } else {
+        setGameState('PLAYING');
+        const { nodes, edges } = generateMap(playerColor);
+        initialWorld = { nodes, edges, payloads: [], transfers: [] };
+    }
     
     worldRef.current = initialWorld;
     setRenderWorld(initialWorld);
-    
-    setGameState('PLAYING');
     setWinner(null);
+    setIsPlayerAutoPilot(false);
     
     const now = Date.now();
     lastTickTimeRef.current = now;
     lastAITimeRef.current = now;
     nextEventTimeRef.current = now + OCEAN_CURRENT_INTERVAL_MS;
     setNextCurrentTime(nextEventTimeRef.current);
-  }, [playerColor]);
+  }, [playerColor, hasCompletedTutorial]);
 
   const resetGame = useCallback(() => {
     setGameState('MENU');
   }, []);
 
+  const toggleAutoPilot = useCallback(() => {
+    setIsPlayerAutoPilot(prev => !prev);
+  }, []);
+
   const handleAttack = useCallback((fromId: string, toId: string, isContinuous: boolean) => {
-    if (gameState !== 'PLAYING') return;
+    if (gameState !== 'PLAYING' && gameState !== 'TUTORIAL') return;
+
+    // Tutorial checks
+    if (gameState === 'TUTORIAL') {
+        const currentTask = TUTORIAL_STEPS[tutorialStep];
+        
+        // Block actions if selecting wrong things (optional, but good for guiding)
+        if (currentTask.requiredAction === 'SELECT' && fromId !== 'tutorial-player') return;
+        
+        // Advance step logic for Attack/Stream actions
+        if (currentTask.id === 2 && fromId === 'tutorial-player' && toId === 'tutorial-neutral') {
+             setTutorialStep(3);
+        }
+        if (currentTask.id === 7 && isContinuous) {
+             setTutorialStep(8);
+        }
+    }
 
     const world = worldRef.current;
     const source = world.nodes.find(n => n.id === fromId);
@@ -58,7 +153,7 @@ export const useGameEngine = () => {
     const amountToSend = isContinuous ? Infinity : Math.floor(source.count / 2);
     if (amountToSend < 1) return;
 
-    // Check if a transfer already exists for this path
+    // Check if a transfer already exists
     const existingTransferIndex = world.transfers.findIndex(t => 
       t.sourceId === fromId && t.targetId === toId
     );
@@ -66,18 +161,12 @@ export const useGameEngine = () => {
     let newTransfers = [...world.transfers];
 
     if (existingTransferIndex !== -1) {
-      // MERGE LOGIC: Update existing transfer instead of creating a new one
       const existing = newTransfers[existingTransferIndex];
-      
       let newTotalToSend = existing.totalToSend;
 
       if (isContinuous) {
         newTotalToSend = Infinity;
       } else {
-        // If it was already infinite, keep it infinite. 
-        // If it was finite, add the new amount to the GOAL.
-        // Note: totalToSend tracks the *original goal*. logic elsewhere checks sentCount < totalToSend.
-        // So we increase totalToSend by the new amount.
         if (existing.totalToSend !== Infinity) {
           newTotalToSend = existing.totalToSend + amountToSend;
         }
@@ -86,11 +175,9 @@ export const useGameEngine = () => {
       newTransfers[existingTransferIndex] = {
         ...existing,
         totalToSend: newTotalToSend
-        // We do NOT reset lastSpawnTime, to maintain the rhythm of the stream
       };
 
     } else {
-      // NEW LOGIC: Create fresh transfer
       const newTransfer: ActiveTransfer = {
         id: `trans-${Date.now()}-${Math.random()}`,
         sourceId: source.id,
@@ -107,18 +194,55 @@ export const useGameEngine = () => {
       newTransfers.push(newTransfer);
     }
 
-    // Mutate Ref directly for immediate responsiveness in next tick
     worldRef.current = {
       ...world,
       transfers: newTransfers
     };
-    // We don't necessarily need to setRenderWorld here, the loop will pick it up next frame (approx 16ms)
-  }, [gameState, playerColor]);
+  }, [gameState, playerColor, tutorialStep]);
+
+  // Special function to advance simple click-through tutorial steps
+  const nextTutorialStep = useCallback(() => {
+     if (gameState === 'TUTORIAL') {
+        const current = TUTORIAL_STEPS[tutorialStep];
+        if (current.requiredAction === 'NEXT' || current.requiredAction === 'SELECT') {
+           if (tutorialStep < TUTORIAL_STEPS.length - 1) {
+              setTutorialStep(prev => prev + 1);
+           }
+        }
+     }
+  }, [gameState, tutorialStep]);
+
+  // Check passive tutorial conditions
+  const checkTutorialConditions = (world: GameWorld) => {
+      if (gameState !== 'TUTORIAL') return;
+      
+      const currentTask = TUTORIAL_STEPS[tutorialStep];
+      
+      // Step 3: Capture Neutral
+      if (currentTask.id === 3) {
+          const neutral = world.nodes.find(n => n.id === 'tutorial-neutral');
+          if (neutral && neutral.owner === PlayerColor.BLUE) {
+              setTutorialStep(4);
+          }
+      }
+      
+      // Step 8: Win (Capture Enemy)
+      if (currentTask.id === 8) {
+          const enemy = world.nodes.find(n => n.id === 'tutorial-enemy');
+          if (enemy && enemy.owner === PlayerColor.BLUE) {
+              // Tutorial Complete
+              localStorage.setItem('microbio_tutorial_completed', 'true');
+              setHasCompletedTutorial(true);
+              setWinner(PlayerColor.BLUE);
+              setGameState('VICTORY');
+          }
+      }
+  };
 
   const gameLoop = useCallback(() => {
     requestRef.current = requestAnimationFrame(gameLoop);
 
-    if (gameState !== 'PLAYING') return;
+    if (gameState !== 'PLAYING' && gameState !== 'TUTORIAL') return;
 
     const now = Date.now();
     if (now - lastTickTimeRef.current < TICK_RATE_MS) return;
@@ -132,34 +256,40 @@ export const useGameEngine = () => {
         lastAITime: lastAITimeRef.current,
         nextEventTime: nextEventTimeRef.current,
         playerColor: playerColor,
-        gameState
+        gameState,
+        difficulty,
+        isPlayerAutoPilot,
+        tutorialStep: tutorialStep // Pass step ID for AI control logic
       }
     );
 
-    // Check Win/Loss
-    const status = checkWinCondition(world, playerColor);
-    if (status.isGameOver) {
-      setGameState(status.winner ? 'VICTORY' : 'DEFEAT');
-      setWinner(status.winner);
+    // Tutorial Specific Checks
+    if (gameState === 'TUTORIAL') {
+        checkTutorialConditions(world);
+    } 
+    // Normal Win Check (Only if not in tutorial, or let tutorial logic handle victory)
+    else {
+        const status = checkWinCondition(world, playerColor);
+        if (status.isGameOver) {
+            setGameState(status.winner ? 'VICTORY' : 'DEFEAT');
+            setWinner(status.winner);
+        }
     }
 
-    // Update Refs
     worldRef.current = world;
     lastTickTimeRef.current = now;
     lastAITimeRef.current = lastAITime;
     
-    // Sync UI if event time changed heavily (or just keep it in sync for the timer)
     if (nextEventTime !== nextEventTimeRef.current) {
         nextEventTimeRef.current = nextEventTime;
         setNextCurrentTime(nextEventTime);
     }
 
-    // Update React State for Render
     if (hasChanges) {
       setRenderWorld(world);
     }
 
-  }, [gameState, playerColor]);
+  }, [gameState, playerColor, difficulty, isPlayerAutoPilot, tutorialStep]); 
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(gameLoop);
@@ -168,14 +298,22 @@ export const useGameEngine = () => {
 
   return {
     gameState,
-    setGameState, // exposed for manual overrides if needed
+    setGameState,
     world: renderWorld,
     playerColor,
     setPlayerColor,
+    difficulty,
+    setDifficulty,
     winner,
     nextCurrentTime,
     startGame,
     resetGame,
-    handleAttack
+    handleAttack,
+    isPlayerAutoPilot,
+    toggleAutoPilot,
+    // Tutorial Exports
+    tutorialStep: gameState === 'TUTORIAL' ? TUTORIAL_STEPS[tutorialStep] : null,
+    nextTutorialStep,
+    hasCompletedTutorial
   };
 };

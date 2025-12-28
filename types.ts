@@ -1,3 +1,4 @@
+
 export enum PlayerColor {
   RED = 'RED',
   BLUE = 'BLUE',
@@ -6,6 +7,8 @@ export enum PlayerColor {
   ORANGE = 'ORANGE',
   GRAY = 'GRAY' // Neutral
 }
+
+export type DifficultyLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface Node {
   id: string;
@@ -54,11 +57,18 @@ export interface ActiveTransfer {
   endY: number;
 }
 
-export type GameState = 'MENU' | 'PLAYING' | 'PAUSED' | 'VICTORY' | 'DEFEAT';
+export type GameState = 'MENU' | 'TUTORIAL' | 'PLAYING' | 'PAUSED' | 'VICTORY' | 'DEFEAT';
 
 export interface GameWorld {
   nodes: Node[];
   edges: Edge[];
   payloads: TravelPayload[];
   transfers: ActiveTransfer[]; // New: Track ongoing streams of units
+}
+
+export interface TutorialStep {
+  id: number;
+  text: string;
+  targetNodeId?: string; // If set, highlights this node
+  requiredAction?: 'NEXT' | 'SELECT' | 'ATTACK' | 'CAPTURE' | 'STREAM' | 'WIN';
 }
