@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, memo, useLayoutEffect } from 'react';
+import React, { useRef, useState, useEffect, memo } from 'react';
 import { GameWorld, Node, Edge } from '../types';
 import { COLOR_MAP, GAME_HEIGHT, GAME_WIDTH, NODE_RADIUS_BASE } from '../constants';
 import { Activity } from 'lucide-react';
@@ -23,20 +23,20 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
 
         let strokeColor = "#475569";
         let strokeWidth = 1;
-        let opacity = 0.5;
+        let opacity = 0.4; // Reduced base opacity
         let dashArray = "none";
-        let filter = "";
-
+        
+        // Removed heavy neon-line filter from default edges
+        
         if (isRandom) {
           strokeColor = isSelected ? "#fcd34d" : "#d97706";
           strokeWidth = isSelected ? 2 : 1.5;
-          opacity = isSelected ? 1 : 0.6;
+          opacity = isSelected ? 1 : 0.4;
           dashArray = "6, 4";
-          filter = "url(#neon-line)";
         } else {
           strokeColor = isSelected ? "#38bdf8" : "#334155";
-          strokeWidth = isSelected ? 4 : 2.5;
-          opacity = isSelected ? 1 : 0.6;
+          strokeWidth = isSelected ? 4 : 2;
+          opacity = isSelected ? 1 : 0.4;
           dashArray = "none";
         }
 
@@ -47,7 +47,7 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
                 x1={s.x} y1={s.y} x2={t.x} y2={t.y}
                 stroke={isRandom ? "#f59e0b" : "#0ea5e9"}
                 strokeWidth={strokeWidth + 4}
-                opacity={0.2}
+                opacity={0.1}
                 strokeLinecap="round"
               />
             )}
@@ -58,7 +58,6 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
               opacity={opacity}
               strokeDasharray={dashArray}
               strokeLinecap="round"
-              filter={filter}
               className="transition-all duration-300"
             />
           </g>
@@ -74,7 +73,7 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
 
 interface GameMapProps {
   world: GameWorld;
-  playerColor: string; // Using string to match generic type, though usually PlayerColor
+  playerColor: string;
   onAttack: (fromId: string, toId: string, isContinuous: boolean) => void;
   nextCurrentTime: number; 
 }
@@ -90,6 +89,14 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
 
   const svgRef = useRef<SVGSVGElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Ref to hold world data for the animation loop without triggering effects
+  const latestWorldRef = useRef(world);
+
+  // Update ref when prop changes
+  useEffect(() => {
+    latestWorldRef.current = world;
+  }, [world]);
 
   // --- Timer Logic ---
   useEffect(() => {
@@ -101,46 +108,51 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
     return () => clearInterval(interval);
   }, [nextCurrentTime]);
 
-  // --- Canvas Rendering for Payloads (High Performance) ---
-  useLayoutEffect(() => {
+  // --- Canvas Rendering Loop (Optimized) ---
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: true }); // optimize for transparency
     if (!ctx) return;
 
-    // Clear previous frame
-    ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-    
-    world.payloads.forEach(p => {
-      const cx = p.startX + (p.endX - p.startX) * p.progress;
-      const cy = p.startY + (p.endY - p.startY) * p.progress;
-      const color = COLOR_MAP[p.owner];
+    let animationFrameId: number;
 
-      // 1. Draw Glow (Fake Halo)
-      ctx.beginPath();
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.3;
-      ctx.fill();
+    const render = () => {
+      // Always clear, but maybe optimize area if needed (full clear is usually fastest for many moving objects)
+      ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+      
+      const payloads = latestWorldRef.current.payloads;
+      
+      // Batch rendering by setting styles once if possible, 
+      // but here colors change per payload, so we iterate.
+      // Use simple drawing operations.
+      
+      for (let i = 0; i < payloads.length; i++) {
+        const p = payloads[i];
+        const cx = p.startX + (p.endX - p.startX) * p.progress;
+        const cy = p.startY + (p.endY - p.startY) * p.progress;
+        const color = COLOR_MAP[p.owner];
 
-      // 2. Draw Core
-      ctx.beginPath();
-      ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = color; 
-      ctx.globalAlpha = 1.0;
-      ctx.fill();
+        // 1. Draw Core (One fill)
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
 
-      // 3. Draw White Center (Highlight)
-      ctx.beginPath();
-      ctx.arc(cx, cy, 1, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.globalAlpha = 0.8;
-      ctx.fill();
-    });
+        // 2. Draw White Center (Highlight) - Small detail, cheap
+        ctx.beginPath();
+        ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
 
-    ctx.globalAlpha = 1.0;
+      animationFrameId = requestAnimationFrame(render);
+    };
 
-  }, [world.payloads]);
+    render();
+
+    return () => cancelAnimationFrame(animationFrameId);
+  }, []); // Run once on mount, loop reads from ref
 
   // --- Helpers ---
 
@@ -160,10 +172,6 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
 
   // --- Interaction Handlers ---
 
-  const handleSvgMouseDown = () => {
-     // Intentionally empty for now, could clear selection but handleBgClick does that
-  };
-
   const handleSvgMouseMove = (e: React.MouseEvent) => {
     if (dragSourceId) {
         setDragEnd(getCursorPoint(e));
@@ -171,7 +179,6 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
   };
 
   const handleSvgMouseUp = () => {
-    // If dragging and dropped on background, cancel drag
     if (dragSourceId) {
         setDragSourceId(null);
         setDragEnd(null);
@@ -185,19 +192,15 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
   };
 
   const handleNodeMouseDown = (node: Node, e: React.MouseEvent) => {
-    // Only allow left click drag for own nodes
     if (e.button !== 0 || node.owner !== playerColor) return;
-    
     setDragSourceId(node.id);
     setDragEnd({ x: node.x, y: node.y });
   };
 
   const handleNodeMouseUp = (node: Node, e: React.MouseEvent) => {
-    // Check if this is a Drop action (Drag started elsewhere)
     if (dragSourceId && dragSourceId !== node.id) {
-        e.stopPropagation(); // Prevent bg click handling
+        e.stopPropagation(); 
         
-        // Check connectivity
         const isConnected = world.edges.some(edge => 
            (edge.source === dragSourceId && edge.target === node.id) || 
            (edge.source === node.id && edge.target === dragSourceId)
@@ -206,25 +209,14 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
         if (isConnected) {
              const isContinuous = e.ctrlKey || e.metaKey;
              onAttack(dragSourceId, node.id, isContinuous);
-             // Clear selection to avoid confusion after a drag action
              setSelectedNodeId(null);
         }
-        
-        // Reset Drag State
         setDragSourceId(null);
         setDragEnd(null);
     }
-    // If dragSourceId === node.id, we do nothing here. 
-    // The onClick handler will fire next and handle the standard selection logic.
   };
 
   const handleNodeClick = (node: Node, e: React.MouseEvent) => {
-    // Standard Selection Logic (Fallback for Click interaction)
-    
-    // If we just finished a valid drag, dragSourceId would be null by now (cleared in MouseUp).
-    // But if MouseUp cleared it because it was a drop, we stopped propagation, so onClick shouldn't fire on the target.
-    // If MouseUp saw source==target, it let it bubble. So here we handle "Click on Self".
-
     if (!selectedNodeId) {
       if (node.owner === playerColor) {
         setSelectedNodeId(node.id);
@@ -234,11 +226,10 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
 
     if (selectedNodeId) {
       if (node.id === selectedNodeId) {
-        setSelectedNodeId(null); // Deselect self
+        setSelectedNodeId(null);
         return;
       }
 
-      // Check for Click-to-Attack (Sequence: Click A -> Click B)
       const isConnected = world.edges.some(edge => 
         (edge.source === selectedNodeId && edge.target === node.id) ||
         (edge.source === node.id && edge.target === selectedNodeId)
@@ -249,7 +240,6 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
         onAttack(selectedNodeId, node.id, isContinuous);
         setSelectedNodeId(null); 
       } else {
-        // Change selection
         if (node.owner === playerColor) {
           setSelectedNodeId(node.id);
         } else {
@@ -278,36 +268,15 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
         onClick={handleBgClick}
         onMouseMove={handleSvgMouseMove}
         onMouseUp={handleSvgMouseUp}
-        onMouseDown={handleSvgMouseDown}
+        onMouseDown={() => {}} // Empty handler to clear implicit default
       >
         <defs>
           <pattern id="organic-grid" width="100" height="100" patternUnits="userSpaceOnUse">
              <circle cx="20" cy="20" r="1.5" fill="#334155" opacity="0.3" />
              <circle cx="70" cy="60" r="1" fill="#334155" opacity="0.2" />
-             <circle cx="50" cy="10" r="1" fill="#334155" opacity="0.2" />
           </pattern>
           
-          <filter id="liquid-glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="2.5" result="coloredBlur" />
-            <feSpecularLighting result="specular" in="coloredBlur" specularExponent="20" lightingColor="#ffffff">
-               <fePointLight x="0" y="0" z="100" />
-            </feSpecularLighting>
-            <feComposite in="specular" in2="SourceAlpha" operator="in" result="specularComposite" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="specularComposite" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-
-          <filter id="neon-line" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="1.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
+          {/* REMOVED: Expensive #liquid-glow and #neon-line filters to fix lag */}
 
           {Object.entries(COLOR_MAP).map(([colorKey, hexValue]) => (
             <radialGradient id={`grad-cell-${colorKey}`} key={colorKey} cx="40%" cy="40%" r="60%">
@@ -347,7 +316,7 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
                 strokeDasharray="8 6"
                 strokeLinecap="round"
                 opacity="0.8"
-                className="pointer-events-none animate-pulse"
+                className="pointer-events-none"
             />
         )}
 
@@ -382,12 +351,13 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
                 }}
                 onMouseEnter={() => setHoverNodeId(node.id)}
                 onMouseLeave={() => setHoverNodeId(null)}
-                className="cursor-pointer transition-all duration-300 ease-out"
+                className="cursor-pointer transition-transform duration-200"
                 style={{ 
                   transformOrigin: `${node.x}px ${node.y}px`,
                   transform: (isHover || isDraggingSource) ? 'scale(1.08)' : 'scale(1)'
                 }}
               >
+                {/* Selection Ring */}
                 {(isSelected || isDraggingSource || (isTargetable && isHover)) && (
                    <circle
                      cx={node.x} cy={node.y}
@@ -397,10 +367,13 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
                      strokeWidth={1}
                      strokeOpacity={0.5}
                      strokeDasharray="4 2"
-                     className="animate-[spin_6s_linear_infinite]"
+                     // Replaced CSS animation with static render for perf, or simple CSS if needed.
+                     // A simple rotation is fine if not on 50 elements. 
+                     // Keeping it simple to ensure smoothness.
                    />
                 )}
 
+                {/* Main Body - Removed Filter */}
                 <circle
                   cx={node.x}
                   cy={node.y}
@@ -410,23 +383,24 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
                   stroke={node.owner === 'GRAY' ? '#475569' : color}
                   strokeWidth={isSelected || isDraggingSource ? 2 : 1.5}
                   strokeOpacity={0.8}
-                  filter={node.owner !== 'GRAY' ? "url(#liquid-glow)" : ""}
                 />
                 
+                {/* Gradient Overlay */}
                 <circle
                   cx={node.x} cy={node.y}
                   r={currentRadius * 0.9}
                   fill={`url(#grad-cell-${node.owner})`}
                 />
 
+                {/* Inner Core */}
                 <circle
                   cx={node.x} cy={node.y}
                   r={currentRadius * 0.35}
                   fill={`url(#grad-core-${node.owner})`}
                   opacity={0.9}
-                  className={`${node.owner !== 'GRAY' ? 'animate-pulse' : ''}`}
                 />
 
+                {/* Text Count */}
                 <text
                   x={node.x}
                   y={node.y}
@@ -440,6 +414,7 @@ const GameMap: React.FC<GameMapProps> = ({ world, playerColor, onAttack, nextCur
                   {Math.floor(node.count)}
                 </text>
                 
+                {/* Capacity Ring - Optimized */}
                 <circle 
                   cx={node.x} cy={node.y} r={currentRadius - 2}
                   fill="none" stroke="white" strokeWidth="2" strokeOpacity="0.2"
