@@ -1,0 +1,64 @@
+export enum PlayerColor {
+  RED = 'RED',
+  BLUE = 'BLUE',
+  GREEN = 'GREEN',
+  PURPLE = 'PURPLE',
+  ORANGE = 'ORANGE',
+  GRAY = 'GRAY' // Neutral
+}
+
+export interface Node {
+  id: string;
+  x: number;
+  y: number;
+  owner: PlayerColor;
+  count: number;
+  capacity: number;
+  radius: number;
+  growthAccumulator: number; // For sub-integer growth handling
+}
+
+export type EdgeType = 'PERMANENT' | 'RANDOM';
+
+export interface Edge {
+  source: string;
+  target: string;
+  type: EdgeType;
+}
+
+export interface TravelPayload {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  owner: PlayerColor;
+  count: number; // Usually 1 now
+  progress: number; // 0 to 1
+  speed: number; // Individual speed based on source size
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+}
+
+export interface ActiveTransfer {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  owner: PlayerColor;
+  totalToSend: number; // How many we intend to send
+  sentCount: number;   // How many sent so far
+  lastSpawnTime: number;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+}
+
+export type GameState = 'MENU' | 'PLAYING' | 'PAUSED' | 'VICTORY' | 'DEFEAT';
+
+export interface GameWorld {
+  nodes: Node[];
+  edges: Edge[];
+  payloads: TravelPayload[];
+  transfers: ActiveTransfer[]; // New: Track ongoing streams of units
+}

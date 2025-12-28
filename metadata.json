@@ -1,0 +1,5 @@
+{
+  "name": "Microbe Wars",
+  "description": "A strategic real-time dominance game where you control a microbial colony. Compete against other species to conquer connected settlements in a petri dish.",
+  "requestFramePermissions": []
+}
