@@ -58,24 +58,59 @@ export const useGameEngine = () => {
     const amountToSend = isContinuous ? Infinity : Math.floor(source.count / 2);
     if (amountToSend < 1) return;
 
-    const newTransfer: ActiveTransfer = {
-      id: `trans-${Date.now()}-${Math.random()}`,
-      sourceId: source.id,
-      targetId: target.id,
-      owner: source.owner,
-      totalToSend: amountToSend,
-      sentCount: 0,
-      lastSpawnTime: 0,
-      startX: source.x,
-      startY: source.y,
-      endX: target.x,
-      endY: target.y
-    };
+    // Check if a transfer already exists for this path
+    const existingTransferIndex = world.transfers.findIndex(t => 
+      t.sourceId === fromId && t.targetId === toId
+    );
+
+    let newTransfers = [...world.transfers];
+
+    if (existingTransferIndex !== -1) {
+      // MERGE LOGIC: Update existing transfer instead of creating a new one
+      const existing = newTransfers[existingTransferIndex];
+      
+      let newTotalToSend = existing.totalToSend;
+
+      if (isContinuous) {
+        newTotalToSend = Infinity;
+      } else {
+        // If it was already infinite, keep it infinite. 
+        // If it was finite, add the new amount to the GOAL.
+        // Note: totalToSend tracks the *original goal*. logic elsewhere checks sentCount < totalToSend.
+        // So we increase totalToSend by the new amount.
+        if (existing.totalToSend !== Infinity) {
+          newTotalToSend = existing.totalToSend + amountToSend;
+        }
+      }
+
+      newTransfers[existingTransferIndex] = {
+        ...existing,
+        totalToSend: newTotalToSend
+        // We do NOT reset lastSpawnTime, to maintain the rhythm of the stream
+      };
+
+    } else {
+      // NEW LOGIC: Create fresh transfer
+      const newTransfer: ActiveTransfer = {
+        id: `trans-${Date.now()}-${Math.random()}`,
+        sourceId: source.id,
+        targetId: target.id,
+        owner: source.owner,
+        totalToSend: amountToSend,
+        sentCount: 0,
+        lastSpawnTime: 0,
+        startX: source.x,
+        startY: source.y,
+        endX: target.x,
+        endY: target.y
+      };
+      newTransfers.push(newTransfer);
+    }
 
     // Mutate Ref directly for immediate responsiveness in next tick
     worldRef.current = {
       ...world,
-      transfers: [...world.transfers, newTransfer]
+      transfers: newTransfers
     };
     // We don't necessarily need to setRenderWorld here, the loop will pick it up next frame (approx 16ms)
   }, [gameState, playerColor]);
