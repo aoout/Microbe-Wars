@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { RotateCcw, Award, Skull, Dna, Activity, Globe, Cpu, GraduationCap, ChevronRight, X, Radio } from 'lucide-react';
+import { RotateCcw, Award, Skull, Dna, Activity, Globe, Cpu, GraduationCap, ChevronRight, X, Radio, SkipForward } from 'lucide-react';
 import { useGameEngine } from './hooks/useGameEngine';
 import GameMap from './components/GameMap';
 import { COLOR_MAP, PLAYABLE_COLORS, DIFFICULTY_SETTINGS } from './constants';
@@ -109,6 +109,8 @@ const App: React.FC = () => {
     handleAttack,
     isPlayerAutoPilot,
     toggleAutoPilot,
+    togglePause,
+    skipTutorial,
     tutorialStep,
     nextTutorialStep,
     hasCompletedTutorial
@@ -201,21 +203,11 @@ const App: React.FC = () => {
                  </div>
 
                  <div className="flex gap-4 w-full">
-                    {!hasCompletedTutorial && (
-                        <button
-                          onClick={() => startGame(true)}
-                          className="flex-1 py-4 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-200 border border-yellow-500/50 rounded-lg font-bold text-lg tracking-widest uppercase transition-all shadow-[0_0_20px_rgba(234,179,8,0.2)] flex items-center justify-center gap-2 animate-pulse"
-                        >
-                           <GraduationCap size={20} />
-                           新手教程
-                        </button>
-                    )}
-                    
+                    {/* Unified Start Button */}
                     <button
-                      onClick={() => startGame(false)}
+                      onClick={() => startGame(!hasCompletedTutorial)}
                       className={`
                         flex-1 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-lg tracking-widest uppercase transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] border border-blue-400/50 flex items-center justify-center gap-3 group-hover:gap-4
-                        ${!hasCompletedTutorial ? 'opacity-80' : ''}
                       `}
                     >
                       <Globe size={20} className="animate-spin-slow" />
@@ -298,12 +290,14 @@ const App: React.FC = () => {
 
                       {/* Right: Controls */}
                       <div className="flex flex-col justify-between items-end pl-4 border-l border-slate-700/50">
+                          {/* Skip Button */}
                           <button 
-                            onClick={(e) => { e.stopPropagation(); resetGame(); }}
-                            className="text-slate-600 hover:text-red-400 transition-colors p-2 rounded-full hover:bg-slate-800"
-                            title="Abort Tutorial"
+                            onClick={(e) => { e.stopPropagation(); skipTutorial(); }}
+                            className="group flex items-center gap-1.5 text-slate-500 hover:text-white transition-all px-2 py-1.5 rounded-md hover:bg-slate-800"
+                            title="Skip Tutorial"
                           >
-                             <X size={16} />
+                             <span className="text-[10px] font-mono font-bold tracking-widest uppercase opacity-0 group-hover:opacity-100 transition-opacity">跳过</span>
+                             <SkipForward size={16} />
                           </button>
                       </div>
                   </div>
@@ -373,6 +367,9 @@ const App: React.FC = () => {
              nextCurrentTime={nextCurrentTime}
              isAutoPilot={isPlayerAutoPilot}
              onToggleAutoPilot={toggleAutoPilot}
+             togglePause={togglePause}
+             isPaused={gameState === 'PAUSED'}
+             onTogglePause={togglePause}
              tutorialTargetId={gameState === 'TUTORIAL' ? tutorialStep?.targetNodeId : undefined}
              onTutorialClick={nextTutorialStep}
            />

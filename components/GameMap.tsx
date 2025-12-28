@@ -2,7 +2,7 @@
 import React, { useRef, useState, useEffect, memo } from 'react';
 import { GameWorld, Node, Edge } from '../types';
 import { COLOR_MAP, GAME_HEIGHT, GAME_WIDTH, NODE_RADIUS_BASE } from '../constants';
-import { Activity, Bot, Crosshair } from 'lucide-react';
+import { Activity, Bot, Crosshair, Pause, Play } from 'lucide-react';
 
 // --- Sub-components ---
 
@@ -77,8 +77,10 @@ interface GameMapProps {
   nextCurrentTime: number; 
   isAutoPilot: boolean;
   onToggleAutoPilot: () => void;
-  tutorialTargetId?: string; // New prop for tutorial
-  onTutorialClick?: () => void; // For advancement
+  isPaused: boolean; 
+  onTogglePause: () => void;
+  tutorialTargetId?: string; 
+  onTutorialClick?: () => void; 
 }
 
 const GameMap: React.FC<GameMapProps> = ({ 
@@ -88,6 +90,8 @@ const GameMap: React.FC<GameMapProps> = ({
   nextCurrentTime, 
   isAutoPilot, 
   onToggleAutoPilot,
+  isPaused,
+  onTogglePause,
   tutorialTargetId,
   onTutorialClick
 }) => {
@@ -111,12 +115,15 @@ const GameMap: React.FC<GameMapProps> = ({
   // --- Timer Logic ---
   useEffect(() => {
     const interval = setInterval(() => {
+      // If paused, don't update countdown to avoid confusion
+      if (isPaused) return;
+
       const now = Date.now();
       const diff = Math.max(0, Math.ceil((nextCurrentTime - now) / 1000));
       setTimeLeft(diff);
     }, 1000);
     return () => clearInterval(interval);
-  }, [nextCurrentTime]);
+  }, [nextCurrentTime, isPaused]);
 
   // --- Canvas Rendering Loop ---
   useEffect(() => {
@@ -475,23 +482,60 @@ const GameMap: React.FC<GameMapProps> = ({
          </div>
       </div>
 
-      {/* HUD - Auto Pilot Toggle (Disabled in Tutorial) */}
+      {/* HUD - Control Panel (Combined Pause & Auto Pilot) */}
+      {/* UPDATED: Increased z-index to 50 so it sits above the Pause Overlay if needed, though clicking overlay now resumes too */}
       {!tutorialTargetId && (
-        <div className="absolute top-4 right-4 z-30 opacity-90">
+        <div className="absolute top-4 right-4 z-50 opacity-90 flex items-center gap-2">
+           {/* Pause Button */}
+           <button
+             onClick={onTogglePause}
+             className={`
+               w-10 h-10 flex items-center justify-center rounded-full border transition-all duration-300 pointer-events-auto
+               ${isPaused 
+                 ? 'bg-yellow-500/20 border-yellow-500 text-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse' 
+                 : 'bg-slate-900/40 border-slate-700/30 text-slate-400 hover:bg-slate-800 hover:text-white hover:border-slate-500'}
+             `}
+             title={isPaused ? "Resume Game" : "Pause Game"}
+           >
+              {isPaused ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
+           </button>
+
+           {/* Auto Pilot Toggle */}
            <button 
              onClick={onToggleAutoPilot}
              className={`
-               flex items-center gap-2 backdrop-blur-sm px-3 py-1.5 rounded-full border transition-all duration-300 pointer-events-auto
+               flex items-center gap-2 backdrop-blur-sm px-3 py-2 rounded-full border transition-all duration-300 pointer-events-auto h-10
                ${isAutoPilot 
                  ? 'bg-blue-900/40 border-blue-500/50 text-blue-300 shadow-[0_0_10px_rgba(59,130,246,0.2)]' 
                  : 'bg-slate-900/30 border-slate-700/30 text-slate-500 hover:bg-slate-900/50 hover:text-slate-300'}
              `}
            >
-             <Bot className={`w-3 h-3 ${isAutoPilot ? 'animate-pulse' : ''}`} />
-             <span className="font-mono-lab text-[10px] font-bold tracking-widest">
+             <Bot className={`w-4 h-4 ${isAutoPilot ? 'animate-pulse' : ''}`} />
+             <span className="font-mono-lab text-[10px] font-bold tracking-widest hidden sm:inline">
                托管 {isAutoPilot ? '开启' : '关闭'}
              </span>
            </button>
+        </div>
+      )}
+
+      {/* PAUSE OVERLAY */}
+      {/* UPDATED: Added cursor-pointer and onClick handler to allow resuming by clicking the screen */}
+      {isPaused && (
+        <div 
+          className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-[2px] cursor-pointer"
+          onClick={onTogglePause}
+        >
+            <div className="bg-slate-900/90 border-y-2 border-yellow-500/50 px-12 py-6 flex items-center gap-4 shadow-[0_0_50px_rgba(0,0,0,0.8)] animate-in fade-in zoom-in duration-300 pointer-events-none">
+                <Pause className="text-yellow-500 animate-pulse" size={32} />
+                <div className="flex flex-col">
+                    <span className="text-yellow-400 font-mono-lab tracking-[0.5em] text-2xl font-bold uppercase drop-shadow-[0_0_10px_rgba(234,179,8,0.5)]">
+                        SYSTEM PAUSED
+                    </span>
+                    <span className="text-yellow-600/80 font-mono-lab text-[10px] tracking-widest text-center mt-1">
+                        CLICK TO RESUME
+                    </span>
+                </div>
+            </div>
         </div>
       )}
 

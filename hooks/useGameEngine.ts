@@ -77,6 +77,7 @@ export const useGameEngine = () => {
   const lastTickTimeRef = useRef<number>(0);
   const lastAITimeRef = useRef<number>(0);
   const nextEventTimeRef = useRef<number>(0);
+  const pauseStartTimeRef = useRef<number>(0); // Track when pause started
   const requestRef = useRef<number>(0);
 
   const [nextCurrentTime, setNextCurrentTime] = useState<number>(0);
@@ -88,7 +89,7 @@ export const useGameEngine = () => {
   }, []);
 
   const startGame = useCallback((forceTutorial = false) => {
-    const shouldRunTutorial = forceTutorial || !hasCompletedTutorial;
+    const shouldRunTutorial = forceTutorial;
 
     let initialWorld;
     if (shouldRunTutorial) {
@@ -120,9 +121,51 @@ export const useGameEngine = () => {
     setGameState('MENU');
   }, []);
 
+  // New function to skip tutorial
+  const skipTutorial = useCallback(() => {
+    localStorage.setItem('microbio_tutorial_completed', 'true');
+    setHasCompletedTutorial(true);
+    setGameState('MENU');
+  }, []);
+
   const toggleAutoPilot = useCallback(() => {
     setIsPlayerAutoPilot(prev => !prev);
   }, []);
+
+  const togglePause = useCallback(() => {
+    if (gameState === 'PLAYING') {
+      setGameState('PAUSED');
+      pauseStartTimeRef.current = Date.now();
+    } else if (gameState === 'PAUSED') {
+      const now = Date.now();
+      const duration = now - pauseStartTimeRef.current;
+      
+      // Shift all time-based references forward by the duration of the pause
+      // This prevents the game from "catching up" instantly (e.g., immediate ocean current shift)
+      lastTickTimeRef.current += duration;
+      lastAITimeRef.current += duration;
+      nextEventTimeRef.current += duration;
+      
+      // Update the exposed state for the timer UI
+      setNextCurrentTime(nextEventTimeRef.current);
+
+      // Shift individual transfer timers so they don't dump all units at once
+      const newTransfers = worldRef.current.transfers.map(t => ({
+        ...t,
+        lastSpawnTime: t.lastSpawnTime + duration
+      }));
+      
+      worldRef.current = {
+        ...worldRef.current,
+        transfers: newTransfers
+      };
+      
+      // Sync render state
+      setRenderWorld(worldRef.current);
+
+      setGameState('PLAYING');
+    }
+  }, [gameState]);
 
   const handleAttack = useCallback((fromId: string, toId: string, isContinuous: boolean) => {
     if (gameState !== 'PLAYING' && gameState !== 'TUTORIAL') return;
@@ -311,7 +354,8 @@ export const useGameEngine = () => {
     handleAttack,
     isPlayerAutoPilot,
     toggleAutoPilot,
-    // Tutorial Exports
+    togglePause,
+    skipTutorial, // Export updated function
     tutorialStep: gameState === 'TUTORIAL' ? TUTORIAL_STEPS[tutorialStep] : null,
     nextTutorialStep,
     hasCompletedTutorial
