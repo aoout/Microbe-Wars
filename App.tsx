@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { RotateCcw, Award, Skull, Activity, Globe, Cpu, GraduationCap, ChevronRight, X, Radio, SkipForward, Dna } from 'lucide-react';
 import { useGameEngine } from './hooks/useGameEngine';
 import GameMap from './components/GameMap';
+import StatsWidget from './components/StatsWidget'; // Import the new component
 import { COLOR_MAP, PLAYABLE_COLORS, DIFFICULTY_SETTINGS } from './constants';
 import { DifficultyLevel } from './types';
 
@@ -491,19 +492,26 @@ const App: React.FC = () => {
       {/* Main Game Area */}
       <div className="flex-1 relative z-0">
          {(world.nodes.length > 0) && (
-           <GameMap 
-             world={world} 
-             playerColor={playerColor} 
-             onAttack={handleAttack}
-             nextCurrentTime={nextCurrentTime}
-             isAutoPilot={isPlayerAutoPilot}
-             onToggleAutoPilot={toggleAutoPilot}
-             togglePause={togglePause}
-             isPaused={gameState === 'PAUSED'}
-             onTogglePause={togglePause}
-             tutorialTargetId={gameState === 'TUTORIAL' ? tutorialStep?.targetNodeId : undefined}
-             onTutorialClick={nextTutorialStep}
-           />
+           <>
+             <GameMap 
+               world={world} 
+               playerColor={playerColor} 
+               onAttack={handleAttack}
+               nextCurrentTime={nextCurrentTime}
+               isAutoPilot={isPlayerAutoPilot}
+               onToggleAutoPilot={toggleAutoPilot}
+               togglePause={togglePause}
+               isPaused={gameState === 'PAUSED'}
+               onTogglePause={togglePause}
+               tutorialTargetId={gameState === 'TUTORIAL' ? tutorialStep?.targetNodeId : undefined}
+               onTutorialClick={nextTutorialStep}
+             />
+             
+             {/* New Stats Widget */}
+             {(gameState === 'PLAYING' || gameState === 'TUTORIAL') && (
+                <StatsWidget world={world} />
+             )}
+           </>
          )}
       </div>
 

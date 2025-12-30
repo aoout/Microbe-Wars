@@ -409,8 +409,7 @@ export const calculateAIMoves = (
     if (Math.random() < config.hesitationChance) return;
 
     // 1. Basic Check: Must have enough units to be effective
-    // Sending half means we need at least ~15 units to send a packet of ~7
-    if (source.count < 15) return;
+    if (source.count < 10) return;
 
     // 2. Identify Neighbors
     const connectedIds = new Set<string>();
@@ -421,43 +420,75 @@ export const calculateAIMoves = (
     const neighbors = nodes.filter(n => connectedIds.has(n.id));
 
     // 3. Score Targets
-    // We want to find the *best* target.
     let bestTarget: Node | null = null;
     let bestScore = -Infinity;
 
+    // SATURATION PRESSURE
+    // Even though nodes have infinite capacity, we treat the 'capacity' field as a "soft limit" or "ideal density".
+    // If a node is saturated (> 100% capacity), it becomes highly aggressive to "vent" units.
+    const saturation = source.count / source.capacity; 
+
     neighbors.forEach(target => {
-      let score = 0;
+      let score = -Infinity;
       
       const isNeutral = target.owner === PlayerColor.GRAY;
-      const isEnemy = target.owner !== source.owner && !isNeutral;
+      const isEnemy = target.owner !== source.owner && !isNeutral; // Treats Player and other AI equally
       const isFriendly = target.owner === source.owner;
 
       if (isNeutral) {
         // High Priority: Expansion. Neutrals don't grow, so they are free real estate.
         // Prefer closer neutrals or ones with low count.
         score = 100 - target.count; 
+        
+        // If we are overflowing, any expansion is good expansion
+        if (saturation > 0.8) {
+           score += 50;
+        }
+
       } else if (isEnemy) {
         // Combat Priority.
-        // High score if we can overwhelm them.
-        // Low score if we are sending units to die against a fortress.
         const diff = source.count - target.count;
-        if (diff > 0) {
-          score = 50 + diff; // Aggressive
+        
+        // Base logic: Do we have more units?
+        // Note: Infinite growth means enemies can be HUGE.
+        
+        if (saturation > 0.9) {
+          // BERSERK MODE (Attrition Strategy)
+          // If we are full, we MUST attack to utilize our production.
+          // We flatten the penalty for attacking larger enemies.
+          // score = Base Motivation (100) + Scaled Difference.
+          // Example: AI(150) vs Enemy(1000). Diff = -850. Score = 100 - 85 = 15. (Positive!)
+          score = 100 + (diff * 0.1);
         } else {
-          score = -100; // Avoid suicide attacks unless desperate
+          // STANDARD MODE
+          // Be careful. Only attack if we can win or nearly win.
+          if (diff > 0) {
+            score = 50 + diff; // Aggressive if winning
+          } else {
+            // If we are losing, avoid suicide... unless it's close (-10)
+            score = diff > -10 ? -20 : -1000; 
+          }
         }
+        
       } else if (isFriendly) {
         // Support Priority.
         // Help friends who are low.
         if (target.count < 15) {
-          score = 20 + (15 - target.count);
+          score = 50 + (15 - target.count);
+        } else if (target.count < target.capacity * 0.5) {
+          score = 10; // Top up
         } else {
-          score = -10; // Don't over-cluster units
+          score = -50; // Don't over-cluster units, spread them out
+        }
+        
+        // Don't send units to an already saturated friend if we are also saturated
+        if (saturation > 0.8 && (target.count / target.capacity) > 0.8) {
+           score = -200;
         }
       }
 
       // Add a little randomness so AI isn't perfectly predictable
-      score += Math.random() * 10;
+      score += Math.random() * 20;
 
       if (score > bestScore) {
         bestScore = score;
@@ -466,12 +497,13 @@ export const calculateAIMoves = (
     });
 
     // 4. Threshold for action
-    // If the best move is terrible (negative score), do nothing and save units.
-    if (bestTarget && bestScore > 0) {
+    // If we are saturated, we are desperate to act (lower threshold)
+    const threshold = saturation > 0.9 ? 10 : 30;
+
+    if (bestTarget && bestScore > threshold) {
        // Limit: Don't let every node attack every single tick if it's borderline.
        // But if score is high (easy kill), go for it.
-       // In lower difficulties, since we already did a hesitation check, we can be slightly more aggressive here if we decided to act
-       if (bestScore > 40 || Math.random() > 0.3) {
+       if (bestScore > 50 || Math.random() > 0.3) {
          moves.push({ from: source.id, to: (bestTarget as Node).id });
        }
     }
