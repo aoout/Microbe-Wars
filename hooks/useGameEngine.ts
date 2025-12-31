@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GameState, GameWorld, PlayerColor, ActiveTransfer, DifficultyLevel, TutorialStep } from '../types';
 import { generateMap, generateTutorialMap } from '../services/gameLogic';
@@ -70,7 +69,7 @@ export const useGameEngine = () => {
   const [tutorialStep, setTutorialStep] = useState<number>(0);
   const [hasCompletedTutorial, setHasCompletedTutorial] = useState<boolean>(false);
 
-  const worldRef = useRef<GameWorld>({ nodes: [], edges: [], payloads: [], transfers: [] });
+  const worldRef = useRef<GameWorld>({ nodes: [], edges: [], payloads: [], transfers: [], latestEvents: [] });
   const [renderWorld, setRenderWorld] = useState<GameWorld>(worldRef.current);
   
   // Timing Refs
@@ -98,11 +97,11 @@ export const useGameEngine = () => {
         // Force Player Blue in Tutorial for simplicity with text
         setPlayerColor(PlayerColor.BLUE); 
         const { nodes, edges } = generateTutorialMap(PlayerColor.BLUE);
-        initialWorld = { nodes, edges, payloads: [], transfers: [] };
+        initialWorld = { nodes, edges, payloads: [], transfers: [], latestEvents: [] };
     } else {
         setGameState('PLAYING');
         const { nodes, edges } = generateMap(playerColor);
-        initialWorld = { nodes, edges, payloads: [], transfers: [] };
+        initialWorld = { nodes, edges, payloads: [], transfers: [], latestEvents: [] };
     }
     
     worldRef.current = initialWorld;

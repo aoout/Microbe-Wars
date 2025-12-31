@@ -54,7 +54,9 @@ export const generateMap = (playerColor: PlayerColor): { nodes: Node[], edges: E
     count: Math.floor(Math.random() * (30 - 10 + 1)) + 10,
     capacity: MAX_CAPACITY_BASE, // Standard capacity for all
     radius: n.r, // Base radius stored here
-    growthAccumulator: 0 // Init accumulator
+    growthAccumulator: 0, // Init accumulator
+    captureProgress: 1, // Start fully settled
+    prevOwner: PlayerColor.GRAY
   }));
 
   // 4. Create Edges (MST + Random)
@@ -76,6 +78,7 @@ export const generateMap = (playerColor: PlayerColor): { nodes: Node[], edges: E
   activeColors.forEach((color, i) => {
     const nodeIdx = indices[i];
     nodes[nodeIdx].owner = color;
+    nodes[nodeIdx].prevOwner = color;
     nodes[nodeIdx].count = INITIAL_PLAYER_COUNT;
   });
 
@@ -100,7 +103,9 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             count: 40,
             capacity: MAX_CAPACITY_BASE,
             radius: NODE_RADIUS_BASE,
-            growthAccumulator: 0
+            growthAccumulator: 0,
+            captureProgress: 1,
+            prevOwner: playerColor
         },
         {
             id: 'tutorial-neutral',
@@ -110,7 +115,9 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             count: 10,
             capacity: MAX_CAPACITY_BASE,
             radius: NODE_RADIUS_BASE,
-            growthAccumulator: 0
+            growthAccumulator: 0,
+            captureProgress: 1,
+            prevOwner: PlayerColor.GRAY
         },
         {
             id: 'tutorial-enemy',
@@ -120,7 +127,9 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             count: 40,
             capacity: MAX_CAPACITY_BASE,
             radius: NODE_RADIUS_BASE,
-            growthAccumulator: 0
+            growthAccumulator: 0,
+            captureProgress: 1,
+            prevOwner: PlayerColor.RED === playerColor ? PlayerColor.BLUE : PlayerColor.RED,
         }
     ];
 
@@ -148,7 +157,9 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             count: 15 + (i % 5) * 5, // Deterministic count variation
             capacity: MAX_CAPACITY_BASE,
             radius: NODE_RADIUS_BASE,
-            growthAccumulator: 0
+            growthAccumulator: 0,
+            captureProgress: 1,
+            prevOwner: PlayerColor.GRAY
         });
 
         // Spiral out logic

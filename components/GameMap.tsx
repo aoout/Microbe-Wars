@@ -2,7 +2,7 @@
 import React, { useRef, useState, useEffect, memo } from 'react';
 import { GameWorld, Node, Edge } from '../types';
 import { COLOR_MAP, GAME_HEIGHT, GAME_WIDTH, NODE_RADIUS_BASE } from '../constants';
-import { Activity, Bot, Crosshair, Pause, Play } from 'lucide-react';
+import { Activity, Bot, Pause, Play } from 'lucide-react';
 
 // --- Sub-components ---
 
@@ -22,34 +22,40 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
         const isRandom = edge.type === 'RANDOM';
         const isSelected = selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId);
 
-        let strokeColor = "#475569";
-        let strokeWidth = 1;
-        let opacity = 0.4; 
+        // VISUAL UPDATE: Much brighter, more visible connections
+        let strokeColor = "#64748b"; // Base fallback
+        let strokeWidth = 2;
+        let opacity = 0.5; 
         let dashArray = "none";
         
         if (isRandom) {
-          strokeColor = isSelected ? "#fcd34d" : "#d97706";
-          strokeWidth = isSelected ? 3 : 2; 
-          opacity = isSelected ? 1 : 0.6; 
-          dashArray = "6, 4";
+          // Random edges: Bright Amber/Gold, distinctly dashed
+          strokeColor = isSelected ? "#fbbf24" : "#d97706"; // amber-400 : amber-600
+          strokeWidth = isSelected ? 3 : 2.5; 
+          opacity = isSelected ? 0.9 : 0.6; 
+          dashArray = "8, 6"; // Longer dashes
         } else {
-          strokeColor = isSelected ? "#38bdf8" : "#475569";
-          strokeWidth = isSelected ? 5 : 3;
-          opacity = isSelected ? 1 : 0.6;
+          // Permanent edges: Electric Blue/Cyan, thick solid lines
+          strokeColor = isSelected ? "#22d3ee" : "#0ea5e9"; // cyan-400 : sky-500
+          strokeWidth = isSelected ? 4 : 3;
+          opacity = isSelected ? 0.9 : 0.5;
           dashArray = "none";
         }
 
         return (
           <g key={`${edge.source}-${edge.target}-${i}`}>
-            {isSelected && (
-              <line 
+            {/* Outer Glow for active/permanent edges to make them pop against dark bg */}
+            {!isRandom && (
+                <line 
                 x1={s.x} y1={s.y} x2={t.x} y2={t.y}
-                stroke={isRandom ? "#f59e0b" : "#0ea5e9"}
+                stroke={strokeColor}
                 strokeWidth={strokeWidth + 4}
-                opacity={0.1}
+                opacity={0.15}
                 strokeLinecap="round"
-              />
+                />
             )}
+            
+            {/* Main Line */}
             <line 
               x1={s.x} y1={s.y} x2={t.x} y2={t.y}
               stroke={strokeColor}
@@ -59,6 +65,18 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
               strokeLinecap="round"
               className="transition-all duration-300"
             />
+            
+            {/* Animated Flow effect on selection (Optional overlay) */}
+            {isSelected && (
+               <line 
+                x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                stroke="white"
+                strokeWidth={1}
+                strokeDasharray="10, 20"
+                opacity={0.5}
+                className="animate-[dash_1s_linear_infinite]"
+               />
+            )}
           </g>
         );
       })}
@@ -67,6 +85,27 @@ const EdgesLayer = memo(({ edges, nodes, selectedNodeId }: EdgesLayerProps) => {
 }, (prev, next) => {
   return prev.edges === next.edges && prev.selectedNodeId === next.selectedNodeId;
 });
+
+// --- Constants for Visual FX ---
+interface SplashParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number; // 0 to 1
+  color: string;
+  size: number;
+}
+
+interface NodePhysicsState {
+  id: string;
+  x: number; // Original X
+  y: number; // Original Y
+  offsetX: number; // Current visual offset
+  offsetY: number;
+  velocityX: number;
+  velocityY: number;
+}
 
 // --- Main Component ---
 
@@ -90,7 +129,7 @@ const GameMap: React.FC<GameMapProps> = ({
   nextCurrentTime, 
   isAutoPilot, 
   onToggleAutoPilot,
-  isPaused,
+  isPaused, 
   onTogglePause,
   tutorialTargetId,
   onTutorialClick
@@ -99,25 +138,75 @@ const GameMap: React.FC<GameMapProps> = ({
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(60);
   
-  // Drag State
-  const [dragSourceId, setDragSourceId] = useState<string | null>(null);
-  const [dragEnd, setDragEnd] = useState<{x: number, y: number} | null>(null);
+  // Drag State (Path based now)
+  const [dragPath, setDragPath] = useState<string[]>([]);
+  const [dragCurrentPos, setDragCurrentPos] = useState<{x: number, y: number} | null>(null);
 
   const svgRef = useRef<SVGSVGElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   const latestWorldRef = useRef(world);
 
+  // Visual Physics Refs
+  const nodePhysicsMap = useRef<Map<string, NodePhysicsState>>(new Map());
+  const splashParticles = useRef<SplashParticle[]>([]);
+
   useEffect(() => {
     latestWorldRef.current = world;
+    
+    // Process new impact events immediately
+    if (world.latestEvents && world.latestEvents.length > 0) {
+       world.latestEvents.forEach(evt => {
+         if (evt.type === 'IMPACT') {
+            const node = world.nodes.find(n => n.id === evt.targetId);
+            if (!node) return;
+
+            // 1. Trigger Jelly Physics
+            if (!nodePhysicsMap.current.has(node.id)) {
+               nodePhysicsMap.current.set(node.id, {
+                 id: node.id, x: node.x, y: node.y,
+                 offsetX: 0, offsetY: 0, velocityX: 0, velocityY: 0
+               });
+            }
+            const phys = nodePhysicsMap.current.get(node.id)!;
+            
+            // Impact pushes the node slightly in direction of travel
+            // ADJUSTMENT: Reduced to 3% of original intensity
+            const push = evt.force * 6.0 * 0.03; 
+            phys.velocityX += Math.cos(evt.angle) * push;
+            phys.velocityY += Math.sin(evt.angle) * push;
+
+            // 2. Trigger Splash Particles (Cell Fluid)
+            // ADJUSTMENT: Reduced to 8% of original intensity
+            const splashCount = Math.random() < 0.56 ? 1 : 0;
+            
+            const hitX = node.x - Math.cos(evt.angle) * (node.radius + 5);
+            const hitY = node.y - Math.sin(evt.angle) * (node.radius + 5);
+
+            for (let i = 0; i < splashCount; i++) {
+                const spread = (Math.random() - 0.5) * 1.5; 
+                const speed = 1.5 + Math.random() * 2; 
+                const splashAngle = evt.angle + Math.PI + spread;
+                
+                splashParticles.current.push({
+                   x: hitX,
+                   y: hitY,
+                   vx: Math.cos(splashAngle) * speed,
+                   vy: Math.sin(splashAngle) * speed,
+                   life: 1.0,
+                   color: COLOR_MAP[evt.color],
+                   size: 1 + Math.random() * 1.5
+                });
+            }
+         }
+       });
+    }
   }, [world]);
 
   // --- Timer Logic ---
   useEffect(() => {
     const interval = setInterval(() => {
-      // If paused, don't update countdown to avoid confusion
       if (isPaused) return;
-
       const now = Date.now();
       const diff = Math.max(0, Math.ceil((nextCurrentTime - now) / 1000));
       setTimeLeft(diff);
@@ -125,7 +214,7 @@ const GameMap: React.FC<GameMapProps> = ({
     return () => clearInterval(interval);
   }, [nextCurrentTime, isPaused]);
 
-  // --- Canvas Rendering Loop ---
+  // --- Render Loop (Canvas + DOM Physics) ---
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -137,24 +226,112 @@ const GameMap: React.FC<GameMapProps> = ({
     const render = () => {
       ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
       
+      // A. Update & Render Travel Payloads (LIGHT SHUTTLES)
       const payloads = latestWorldRef.current.payloads;
+      
+      // Batch settings for glow
+      ctx.shadowBlur = 8;
       
       for (let i = 0; i < payloads.length; i++) {
         const p = payloads[i];
+        
+        // Calculate Position
         const cx = p.startX + (p.endX - p.startX) * p.progress;
         const cy = p.startY + (p.endY - p.startY) * p.progress;
         const color = COLOR_MAP[p.owner];
 
+        // Geometry for "Tadpole" / Light Shuttle
+        const dx = p.endX - p.startX;
+        const dy = p.endY - p.startY;
+        const angle = Math.atan2(dy, dx);
+        
+        // Length of the trail depends on "Speed". 
+        const trailLength = 20 + (p.speed * 200); 
+        const headRadius = 3.5;
+        
+        // Calculate vertices
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        
+        const tailX = cx - cos * trailLength;
+        const tailY = cy - sin * trailLength;
+        
+        // Draw Trail (Motion Blur)
+        const gradient = ctx.createLinearGradient(cx, cy, tailX, tailY);
+        gradient.addColorStop(0, color);
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        
+        ctx.fillStyle = gradient;
+        ctx.shadowColor = color; // Neon glow
+        
         ctx.beginPath();
-        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-        ctx.fillStyle = color;
+        // Start at head right side
+        ctx.arc(cx, cy, headRadius, angle - Math.PI/2, angle + Math.PI/2);
+        // Line to tail tip
+        ctx.lineTo(tailX, tailY);
+        // Close shape implies line back to head left side
+        ctx.closePath();
         ctx.fill();
 
+        // Draw Bright Core (The physical unit)
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowBlur = 0; // No shadow for core to keep it crisp
         ctx.beginPath();
         ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
         ctx.fill();
+        
+        // Reset shadow for next iteration or other elements
+        ctx.shadowBlur = 8;
       }
+      ctx.shadowBlur = 0; // Reset global
+
+      // B. Update & Render Splash Particles
+      for (let i = splashParticles.current.length - 1; i >= 0; i--) {
+         const sp = splashParticles.current[i];
+         sp.x += sp.vx;
+         sp.y += sp.vy;
+         sp.vx *= 0.95; // drag
+         sp.vy *= 0.95;
+         sp.life -= 0.03; // Fade out
+
+         if (sp.life <= 0) {
+             splashParticles.current.splice(i, 1);
+         } else {
+             ctx.fillStyle = sp.color;
+             ctx.globalAlpha = sp.life;
+             ctx.beginPath();
+             ctx.arc(sp.x, sp.y, sp.size, 0, Math.PI * 2);
+             ctx.fill();
+             ctx.globalAlpha = 1.0;
+         }
+      }
+
+      // C. Spring Physics for Nodes (The "Jelly" Effect)
+      nodePhysicsMap.current.forEach((phys) => {
+          const k = 0.08; // Stiffness
+          const c = 0.85; // Damping
+          
+          const forceX = -k * phys.offsetX;
+          const forceY = -k * phys.offsetY;
+          
+          phys.velocityX += forceX;
+          phys.velocityY += forceY;
+          
+          phys.velocityX *= c;
+          phys.velocityY *= c;
+          
+          phys.offsetX += phys.velocityX;
+          phys.offsetY += phys.velocityY;
+
+          // Apply to DOM if magnitude is significant
+          if (Math.abs(phys.offsetX) > 0.01 || Math.abs(phys.offsetY) > 0.01) {
+              const el = document.getElementById(`node-group-${phys.id}`);
+              if (el) {
+                  el.style.transform = `translate(${phys.offsetX.toFixed(2)}px, ${phys.offsetY.toFixed(2)}px)`;
+                  el.style.transformOrigin = `${phys.x}px ${phys.y}px`;
+              }
+          }
+      });
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -183,15 +360,29 @@ const GameMap: React.FC<GameMapProps> = ({
   // --- Interaction Handlers ---
 
   const handleSvgMouseMove = (e: React.MouseEvent) => {
-    if (dragSourceId) {
-        setDragEnd(getCursorPoint(e));
+    if (dragPath.length > 0) {
+        setDragCurrentPos(getCursorPoint(e));
     }
   };
 
-  const handleSvgMouseUp = () => {
-    if (dragSourceId) {
-        setDragSourceId(null);
-        setDragEnd(null);
+  const handleSvgMouseUp = (e: React.MouseEvent) => {
+    if (dragPath.length > 0) {
+        // Execute path commands if we have a valid chain (more than 1 node)
+        if (dragPath.length >= 2) {
+             const isContinuous = e.ctrlKey || e.metaKey;
+             
+             // Process the chain: A->B, B->C, C->D...
+             for (let i = 0; i < dragPath.length - 1; i++) {
+                 const fromId = dragPath[i];
+                 const toId = dragPath[i+1];
+                 onAttack(fromId, toId, isContinuous);
+             }
+        }
+        
+        // Reset
+        setDragPath([]);
+        setDragCurrentPos(null);
+        setSelectedNodeId(null);
     }
   };
 
@@ -203,32 +394,64 @@ const GameMap: React.FC<GameMapProps> = ({
 
   const handleNodeMouseDown = (node: Node, e: React.MouseEvent) => {
     if (e.button !== 0 || node.owner !== playerColor) return;
-    setDragSourceId(node.id);
-    setDragEnd({ x: node.x, y: node.y });
     
-    // Tutorial: If asking to select player node
+    // Start Path
+    setDragPath([node.id]);
+    setDragCurrentPos({ x: node.x, y: node.y });
+    
     if (onTutorialClick && tutorialTargetId === node.id) {
        onTutorialClick();
     }
   };
 
-  const handleNodeMouseUp = (node: Node, e: React.MouseEvent) => {
-    if (dragSourceId && dragSourceId !== node.id) {
-        e.stopPropagation(); 
-        
-        const isConnected = world.edges.some(edge => 
-           (edge.source === dragSourceId && edge.target === node.id) || 
-           (edge.source === node.id && edge.target === dragSourceId)
-        );
+  const handleNodeMouseEnter = (node: Node) => {
+      setHoverNodeId(node.id);
+      
+      // Drag Logic: Chain Extension
+      if (dragPath.length > 0) {
+          const lastId = dragPath[dragPath.length - 1];
+          
+          // 1. If hovering over the last node, do nothing
+          if (node.id === lastId) return;
 
-        if (isConnected) {
-             const isContinuous = e.ctrlKey || e.metaKey;
-             onAttack(dragSourceId, node.id, isContinuous);
-             setSelectedNodeId(null);
-        }
-        setDragSourceId(null);
-        setDragEnd(null);
+          // 2. Undo Logic: If hovering over the second-to-last node, remove the last segment (backtrack)
+          if (dragPath.length >= 2 && node.id === dragPath[dragPath.length - 2]) {
+              setDragPath(prev => prev.slice(0, -1));
+              return;
+          }
+
+          // 3. Extension Logic
+          const lastNode = world.nodes.find(n => n.id === lastId);
+          if (!lastNode) return;
+
+          // Rule: Can only extend chain FROM a node we own
+          if (lastNode.owner !== playerColor) return;
+
+          // Rule: Must be connected
+          const isConnected = world.edges.some(edge => 
+            (edge.source === lastId && edge.target === node.id) || 
+            (edge.source === node.id && edge.target === lastId)
+          );
+
+          if (isConnected) {
+              setDragPath(prev => [...prev, node.id]);
+          }
+      }
+  };
+
+  const handleNodeMouseUp = (node: Node, e: React.MouseEvent) => {
+    // If we just clicked (path length 1) and released on same node, treat as click selection
+    if (dragPath.length === 1 && dragPath[0] === node.id) {
+        // Just a click, not a drag chain
+        e.stopPropagation();
+        handleNodeClick(node, e);
+        setDragPath([]);
+        setDragCurrentPos(null);
+        return;
     }
+    
+    // Otherwise, let the SVG global handler execute the chain
+    // (Bubbling will allow handleSvgMouseUp to fire)
   };
 
   const handleNodeClick = (node: Node, e: React.MouseEvent) => {
@@ -267,6 +490,12 @@ const GameMap: React.FC<GameMapProps> = ({
     }
   };
 
+  // Helper to get node position by ID for rendering path
+  const getNodePos = (id: string) => {
+      const n = world.nodes.find(node => node.id === id);
+      return n ? { x: n.x, y: n.y } : { x: 0, y: 0 };
+  };
+
   return (
     <div className="relative w-full h-full flex items-center justify-center overflow-hidden select-none z-10">
       
@@ -286,7 +515,6 @@ const GameMap: React.FC<GameMapProps> = ({
         onClick={handleBgClick}
         onMouseMove={handleSvgMouseMove}
         onMouseUp={handleSvgMouseUp}
-        onMouseDown={() => {}} 
       >
         <defs>
           <pattern id="organic-grid" width="100" height="100" patternUnits="userSpaceOnUse">
@@ -294,21 +522,38 @@ const GameMap: React.FC<GameMapProps> = ({
              <circle cx="70" cy="60" r="1" fill="#334155" opacity="0.2" />
           </pattern>
           
-          {Object.entries(COLOR_MAP).map(([colorKey, hexValue]) => (
-            <radialGradient id={`grad-cell-${colorKey}`} key={colorKey} cx="40%" cy="40%" r="60%">
-              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.2" /> 
-              <stop offset="30%" stopColor={hexValue} stopOpacity="0.6" />
-              <stop offset="90%" stopColor={hexValue} stopOpacity="0.1" />
-              <stop offset="100%" stopColor={hexValue} stopOpacity="0.8" />
-            </radialGradient>
+          {/* Organic Cell Gradients & Ink Transitions */}
+          {world.nodes.map(node => (
+             <React.Fragment key={`grad-${node.id}`}>
+                 {/* Standard Body Gradient */}
+                 <radialGradient id={`cell-body-${node.owner}`} cx="50%" cy="50%" r="50%" fx="30%" fy="30%">
+                    <stop offset="0%" stopColor="#ffffff" stopOpacity="0.1" />
+                    <stop offset="40%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.3" />
+                    <stop offset="85%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.8" />
+                    <stop offset="100%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.2" />
+                 </radialGradient>
+
+                 {/* Ink Spread Transition Gradient */}
+                 <radialGradient id={`ink-transition-${node.id}`} cx="50%" cy="50%" r="50%">
+                    <stop offset={`${Math.max(0, node.captureProgress * 100 - 20)}%`} stopColor={COLOR_MAP[node.owner]} />
+                    <stop offset={`${Math.min(100, node.captureProgress * 100)}%`} stopColor={COLOR_MAP[node.owner]} stopOpacity="0.8" />
+                    <stop offset={`${Math.min(100, node.captureProgress * 100 + 10)}%`} stopColor={COLOR_MAP[node.prevOwner || node.owner]} />
+                 </radialGradient>
+             </React.Fragment>
           ))}
           
-          {Object.entries(COLOR_MAP).map(([colorKey, hexValue]) => (
-            <radialGradient id={`grad-core-${colorKey}`} key={`core-${colorKey}`} cx="50%" cy="50%" r="50%">
-               <stop offset="0%" stopColor="white" stopOpacity="0.9" />
-               <stop offset="100%" stopColor={hexValue} stopOpacity="0.8" />
-            </radialGradient>
-          ))}
+          <radialGradient id="cell-core-general" cx="50%" cy="50%" r="50%">
+               <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+               <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+          </radialGradient>
+          
+          <filter id="glow-soft">
+            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
         </defs>
 
         <rect width="100%" height="100%" fill="url(#organic-grid)" />
@@ -319,152 +564,177 @@ const GameMap: React.FC<GameMapProps> = ({
           selectedNodeId={selectedNodeId} 
         />
 
-        {dragSourceId && dragEnd && (
-            <line
-                x1={world.nodes.find(n => n.id === dragSourceId)?.x}
-                y1={world.nodes.find(n => n.id === dragSourceId)?.y}
-                x2={dragEnd.x}
-                y2={dragEnd.y}
-                stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
-                strokeWidth="3"
-                strokeDasharray="8 6"
-                strokeLinecap="round"
-                opacity="0.8"
-                className="pointer-events-none"
-            />
+        {/* Drag Line Path */}
+        {dragPath.length > 0 && dragCurrentPos && (
+            <g className="pointer-events-none">
+                {/* 1. Established Chain (Solid/Dashed Lines between nodes) */}
+                {dragPath.map((id, index) => {
+                    if (index === dragPath.length - 1) return null; // Skip last one, handled by currentPos
+                    const cur = getNodePos(id);
+                    const next = getNodePos(dragPath[index+1]);
+                    return (
+                        <line
+                            key={`drag-seg-${index}`}
+                            x1={cur.x}
+                            y1={cur.y}
+                            x2={next.x}
+                            y2={next.y}
+                            stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
+                            strokeWidth="4"
+                            strokeLinecap="round"
+                            opacity="0.8"
+                        />
+                    );
+                })}
+                
+                {/* 2. Active Drag Line (Last Node to Mouse) */}
+                {(() => {
+                    const lastPos = getNodePos(dragPath[dragPath.length - 1]);
+                    return (
+                        <line
+                            x1={lastPos.x}
+                            y1={lastPos.y}
+                            x2={dragCurrentPos.x}
+                            y2={dragCurrentPos.y}
+                            stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
+                            strokeWidth="3"
+                            strokeDasharray="8 6"
+                            strokeLinecap="round"
+                            opacity="0.6"
+                        />
+                    );
+                })()}
+            </g>
         )}
 
         <g>
-          {world.nodes.map((node) => {
+          {world.nodes.map((node, index) => {
             const isSelected = selectedNodeId === node.id;
             const isHover = hoverNodeId === node.id;
-            const isDraggingSource = dragSourceId === node.id;
+            // Node is in the current drag path
+            const isInDragPath = dragPath.includes(node.id);
+            // Is this the specific node we started dragging from?
+            const isDragStart = dragPath.length > 0 && dragPath[0] === node.id;
+            
             const isTutorialTarget = tutorialTargetId === node.id;
             
-            const currentRadius = getDynamicRadius(node.count);
+            const baseRadius = getDynamicRadius(node.count);
+            // Hover/Selection Pop
+            const displayRadius = (isHover || isInDragPath) ? baseRadius * 1.1 : baseRadius;
+            
             const color = COLOR_MAP[node.owner];
             
+            // Interaction Check (Targetable logic for click-selection mode)
             let isTargetable = false;
-            const sourceIdToCheck = dragSourceId || selectedNodeId;
-            if (sourceIdToCheck && sourceIdToCheck !== node.id) {
+            // If dragging, we handle targeting in mouseEnter logic, not visual check here
+            if (selectedNodeId && selectedNodeId !== node.id) {
                isTargetable = world.edges.some(e => 
-                (e.source === sourceIdToCheck && e.target === node.id) ||
-                (e.source === node.id && e.target === sourceIdToCheck)
+                (e.source === selectedNodeId && e.target === node.id) ||
+                (e.source === node.id && e.target === selectedNodeId)
               );
+            }
+
+            // Initialization for physics map if missing
+            if (!nodePhysicsMap.current.has(node.id)) {
+                nodePhysicsMap.current.set(node.id, {
+                    id: node.id, x: node.x, y: node.y, offsetX: 0, offsetY: 0, velocityX: 0, velocityY: 0
+                });
             }
 
             return (
               <g
                 key={node.id}
-                onMouseDown={(e) => handleNodeMouseDown(node, e)}
-                onMouseUp={(e) => handleNodeMouseUp(node, e)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleNodeClick(node, e);
-                }}
-                onMouseEnter={() => setHoverNodeId(node.id)}
-                onMouseLeave={() => setHoverNodeId(null)}
-                className="cursor-pointer transition-transform duration-200"
+                id={`node-group-${node.id}`} // Hook for direct DOM manipulation
                 style={{ 
-                  transformOrigin: `${node.x}px ${node.y}px`,
-                  transform: (isHover || isDraggingSource) ? 'scale(1.08)' : 'scale(1)'
+                    transformOrigin: `${node.x}px ${node.y}px`,
+                    animationDelay: `${index * -0.5}s` // Staggered jitter
                 }}
+                className="cursor-pointer"
+                onMouseDown={(e) => handleNodeMouseDown(node, e)}
+                onMouseEnter={() => handleNodeMouseEnter(node)}
+                onMouseLeave={() => setHoverNodeId(null)}
+                onMouseUp={(e) => handleNodeMouseUp(node, e)}
+                onClick={(e) => { e.stopPropagation(); }} // Click handled in MouseUp for unifying logic
               >
-                {/* Advanced Tutorial Reticle */}
+                
+                {/* 1. Tutorial Reticle (Underlay) */}
                 {isTutorialTarget && (
-                  <g className="pointer-events-none">
-                     {/* Rotating Dashed Ring */}
-                     <circle
-                       cx={node.x} cy={node.y}
-                       r={currentRadius + 18}
-                       fill="none"
-                       stroke="#facc15"
-                       strokeWidth="1.5"
-                       strokeDasharray="10 6"
-                       className="animate-[spin_6s_linear_infinite]"
-                       style={{ transformOrigin: `${node.x}px ${node.y}px` }}
-                       opacity="0.6"
-                     />
-                     {/* Pulsing Solid Ring */}
-                     <circle
-                       cx={node.x} cy={node.y}
-                       r={currentRadius + 12}
-                       fill="none"
-                       stroke="#facc15"
-                       strokeWidth="2"
-                       className="animate-pulse-membrane"
-                     />
-                     {/* Corner Brackets */}
-                     <g className="animate-[spin_4s_linear_reverse_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
-                       {/* Top Left */}
-                       <path d={`M ${node.x - currentRadius - 12} ${node.y - currentRadius} V ${node.y - currentRadius - 12} H ${node.x - currentRadius}`} stroke="#facc15" strokeWidth="2" fill="none" />
-                       {/* Bottom Right */}
-                       <path d={`M ${node.x + currentRadius + 12} ${node.y + currentRadius} V ${node.y + currentRadius + 12} H ${node.x + currentRadius}`} stroke="#facc15" strokeWidth="2" fill="none" />
-                     </g>
+                  <g className="pointer-events-none animate-spin-slow" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                     <circle cx={node.x} cy={node.y} r={displayRadius + 20} fill="none" stroke="#eab308" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
+                     <path d={`M ${node.x} ${node.y - displayRadius - 25} L ${node.x} ${node.y - displayRadius - 15}`} stroke="#eab308" strokeWidth="2" />
+                     <path d={`M ${node.x} ${node.y + displayRadius + 25} L ${node.x} ${node.y + displayRadius + 15}`} stroke="#eab308" strokeWidth="2" />
                   </g>
                 )}
 
-                {/* Selection Ring */}
-                {(isSelected || isDraggingSource || (isTargetable && isHover)) && (
+                {/* 2. Selection / Target Ring */}
+                {(isSelected || isInDragPath || (isTargetable && isHover)) && (
                    <circle
                      cx={node.x} cy={node.y}
-                     r={currentRadius + 6}
+                     r={displayRadius + 8}
                      fill="none"
-                     stroke={isSelected || isDraggingSource ? '#fff' : color}
-                     strokeWidth={1}
-                     strokeOpacity={0.5}
-                     strokeDasharray="4 2"
+                     stroke={isSelected || isInDragPath ? '#fff' : color}
+                     strokeWidth={1.5}
+                     strokeOpacity={0.8}
+                     strokeDasharray="2 4"
+                     className="animate-[spin_4s_linear_infinite]"
+                     style={{ transformOrigin: `${node.x}px ${node.y}px` }}
                    />
                 )}
-
-                {/* Main Body */}
-                <circle
-                  cx={node.x}
-                  cy={node.y}
-                  r={currentRadius}
-                  fill={node.owner === 'GRAY' ? '#1e293b' : color}
-                  fillOpacity={node.owner === 'GRAY' ? 0.5 : 0.2}
-                  stroke={node.owner === 'GRAY' ? '#475569' : color}
-                  strokeWidth={isSelected || isDraggingSource ? 2 : 1.5}
-                  strokeOpacity={0.8}
-                />
                 
-                {/* Gradient Overlay */}
-                <circle
-                  cx={node.x} cy={node.y}
-                  r={currentRadius * 0.9}
-                  fill={`url(#grad-cell-${node.owner})`}
-                />
+                {/* Drag Path Sequence Number (Optional: Shows 1, 2, 3...) */}
+                {isInDragPath && (
+                     <circle cx={node.x} cy={node.y} r={displayRadius + 12} stroke="white" strokeWidth="1" opacity="0.5" fill="none" />
+                )}
 
-                {/* Inner Core */}
-                <circle
-                  cx={node.x} cy={node.y}
-                  r={currentRadius * 0.35}
-                  fill={`url(#grad-core-${node.owner})`}
-                  opacity={0.9}
-                />
+                {/* 3. The Cell (Animated Blob) */}
+                <g className="animate-blob" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                    
+                    {/* Main Fill - Check for Transition */}
+                    <circle
+                      cx={node.x} cy={node.y}
+                      r={displayRadius}
+                      // Use ink transition gradient if capturing, otherwise standard body gradient
+                      fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : `url(#cell-body-${node.owner})`}
+                      className="transition-all duration-300"
+                    />
+                    
+                    {/* Membrane Edge (Irregular Stroke) */}
+                    <circle
+                      cx={node.x} cy={node.y}
+                      r={displayRadius}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={2}
+                      strokeOpacity={0.6}
+                      filter="url(#glow-soft)"
+                    />
 
-                {/* Text Count */}
+                    {/* Nucleus (Core) */}
+                    <circle
+                      cx={node.x} cy={node.y}
+                      r={displayRadius * 0.4}
+                      fill="url(#cell-core-general)"
+                      opacity={0.6}
+                      filter="url(#glow-soft)"
+                      className="animate-pulse"
+                    />
+                </g>
+
+                {/* 4. Data Text (Centered directly on node) */}
                 <text
                   x={node.x}
                   y={node.y}
                   dy=".35em"
                   textAnchor="middle"
-                  className="font-mono-lab font-bold fill-white text-[10px] pointer-events-none drop-shadow-md"
+                  className="font-mono-lab font-bold fill-white pointer-events-none drop-shadow-md select-none"
                   style={{ 
-                    fontSize: Math.max(10, currentRadius * 0.55),
+                    fontSize: Math.max(10, displayRadius * 0.5),
+                    textShadow: `0 0 4px ${color}`
                   }}
                 >
                   {Math.floor(node.count)}
                 </text>
-                
-                {/* Capacity Ring */}
-                <circle 
-                  cx={node.x} cy={node.y} r={currentRadius - 2}
-                  fill="none" stroke="white" strokeWidth="2" strokeOpacity="0.2"
-                  strokeDasharray={`${(node.count / node.capacity) * (2 * Math.PI * (currentRadius-2))} 1000`}
-                  transform={`rotate(-90 ${node.x} ${node.y})`}
-                />
+
               </g>
             );
           })}
@@ -482,11 +752,9 @@ const GameMap: React.FC<GameMapProps> = ({
          </div>
       </div>
 
-      {/* HUD - Control Panel (Combined Pause & Auto Pilot) */}
-      {/* UPDATED: Increased z-index to 50 so it sits above the Pause Overlay if needed, though clicking overlay now resumes too */}
+      {/* HUD - Control Panel */}
       {!tutorialTargetId && (
         <div className="absolute top-4 right-4 z-50 opacity-90 flex items-center gap-2">
-           {/* Pause Button */}
            <button
              onClick={onTogglePause}
              className={`
@@ -495,12 +763,10 @@ const GameMap: React.FC<GameMapProps> = ({
                  ? 'bg-yellow-500/20 border-yellow-500 text-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse' 
                  : 'bg-slate-900/40 border-slate-700/30 text-slate-400 hover:bg-slate-800 hover:text-white hover:border-slate-500'}
              `}
-             title={isPaused ? "Resume Game" : "Pause Game"}
            >
               {isPaused ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
            </button>
 
-           {/* Auto Pilot Toggle */}
            <button 
              onClick={onToggleAutoPilot}
              className={`
@@ -519,7 +785,6 @@ const GameMap: React.FC<GameMapProps> = ({
       )}
 
       {/* PAUSE OVERLAY */}
-      {/* UPDATED: Added cursor-pointer and onClick handler to allow resuming by clicking the screen */}
       {isPaused && (
         <div 
           className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-[2px] cursor-pointer"

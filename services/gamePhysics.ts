@@ -1,5 +1,5 @@
 
-import { GameWorld, PlayerColor, TravelPayload, ActiveTransfer, Node, DifficultyLevel } from '../types';
+import { GameWorld, PlayerColor, TravelPayload, ActiveTransfer, Node, DifficultyLevel, GameEvent } from '../types';
 import { 
   calculateGrowthIncrement, 
   calculateUnitSpeed, 
@@ -43,6 +43,8 @@ export const advanceGameState = (
   let newEdges = currentWorld.edges;
   let newPayloads = [...currentWorld.payloads];
   let newTransfers = [...currentWorld.transfers];
+  // We recreate the events array every tick to ensure only new events are processed
+  const currentEvents: GameEvent[] = [];
   let hasChanges = false;
   
   let updatedNextEventTime = ctx.nextEventTime;
@@ -69,29 +71,42 @@ export const advanceGameState = (
     hasChanges = true;
   }
 
-  // 2. Node Growth
+  // 2. Node Growth & Ink Spreading
   const baseGrowthPerTick = 1 / (GROWTH_INTERVAL_MS / TICK_RATE_MS); 
+  const inkSpreadSpeed = 0.05; // 5% per tick, so ~1 second to fill
+
   newNodes = newNodes.map(n => {
-    // Neutrals don't grow.
-    // Removed the (n.count < n.capacity) check to allow infinite growth.
-    if (n.owner !== PlayerColor.GRAY) {
-      const growthIncrement = calculateGrowthIncrement(n.count, baseGrowthPerTick);
-      const newAccumulator = (n.growthAccumulator || 0) + growthIncrement;
+    let updatedNode = { ...n };
+    let nodeChanged = false;
+
+    // A. Ink Spreading Animation Logic
+    if (updatedNode.captureProgress < 1) {
+       updatedNode.captureProgress = Math.min(1, updatedNode.captureProgress + inkSpreadSpeed);
+       nodeChanged = true;
+       hasChanges = true;
+    }
+
+    // B. Biological Growth
+    // Neutrals don't grow
+    if (updatedNode.owner !== PlayerColor.GRAY) {
+      const growthIncrement = calculateGrowthIncrement(updatedNode.count, baseGrowthPerTick);
+      const newAccumulator = (updatedNode.growthAccumulator || 0) + growthIncrement;
       
       if (newAccumulator >= 1) {
         const wholeNumberGrowth = Math.floor(newAccumulator);
+        updatedNode.count += wholeNumberGrowth;
+        updatedNode.growthAccumulator = newAccumulator - wholeNumberGrowth;
+        nodeChanged = true;
         hasChanges = true;
-        return { 
-          ...n, 
-          // Removed Math.min(n.capacity, ...) to allow infinite growth
-          count: n.count + wholeNumberGrowth, 
-          growthAccumulator: newAccumulator - wholeNumberGrowth 
-        };
       } else {
-        return { ...n, growthAccumulator: newAccumulator };
+        updatedNode.growthAccumulator = newAccumulator;
+        // FIX: We must flag the node as changed so the new accumulator value is returned,
+        // even if we don't trigger a global re-render (hasChanges remains false for this case).
+        nodeChanged = true; 
       }
     }
-    return n;
+    
+    return nodeChanged ? updatedNode : n;
   });
 
   // 3. Unit Spawning from Active Transfers
@@ -158,8 +173,6 @@ export const advanceGameState = (
 
   // 4. AI Logic
   const aiInterval = DIFFICULTY_SETTINGS[ctx.difficulty].actionInterval;
-  
-  // Disable AI completely in tutorial
   const isAIEnabled = ctx.gameState !== 'TUTORIAL';
 
   if (isAIEnabled && ctx.now - ctx.lastAITime > aiInterval) {
@@ -167,10 +180,10 @@ export const advanceGameState = (
       nodes: newNodes, 
       edges: newEdges, 
       payloads: newPayloads, 
-      transfers: newTransfers 
+      transfers: newTransfers,
+      latestEvents: [] 
     };
     
-    // Pass isPlayerAutoPilot context here
     const moves = calculateAIMoves(tempWorld, ctx.playerColor, ctx.difficulty, ctx.isPlayerAutoPilot);
     
     if (moves.length > 0) {
@@ -199,21 +212,17 @@ export const advanceGameState = (
     updatedLastAITime = ctx.now;
   }
 
-  // 5. Physics: Payload Movement & Collision (OPTIMIZED)
+  // 5. Physics: Payload Movement & Collision
   const survivedPayloads: TravelPayload[] = [];
   const payloadsToRemove = new Set<string>();
   
-  // Step 5a: Move all payloads first
   newPayloads.forEach(p => {
     p.progress += p.speed;
   });
 
-  // Step 5b: Spatial Partitioning for Collision
-  // Group payloads by "Edge Key". An edge between A and B (regardless of direction) is the same collision space.
   const edgeGroups = new Map<string, TravelPayload[]>();
 
   for (const p of newPayloads) {
-    // Determine a unique key for the edge regardless of direction A->B or B->A
     const key = p.sourceId < p.targetId 
       ? `${p.sourceId}-${p.targetId}` 
       : `${p.targetId}-${p.sourceId}`;
@@ -224,18 +233,11 @@ export const advanceGameState = (
     edgeGroups.get(key)!.push(p);
   }
 
-  // Iterate over groups
   for (const group of edgeGroups.values()) {
     if (group.length < 2) continue;
-
-    // Calculate path length once for this group to determine collision threshold in progress units
     const dx = group[0].endX - group[0].startX;
     const dy = group[0].endY - group[0].startY;
     const pathLength = Math.hypot(dx, dy);
-    
-    // We want collision radius of approx 15 pixels.
-    // In progress space (0-1), this is 15 / Length.
-    // Protection against div by zero
     const collisionThreshold = pathLength > 0 ? 15 / pathLength : 0.05;
 
     for (let i = 0; i < group.length; i++) {
@@ -247,23 +249,15 @@ export const advanceGameState = (
         const p1 = group[i];
         const p2 = group[j];
         
-        // Optimization: Only check different owners
         if (p1.owner === p2.owner) continue;
 
-        // Collision logic:
-        // p1 and p2 must be moving in opposite directions to collide head-on in this 1D space.
         const movingOpposite = p1.sourceId !== p2.sourceId;
         
         if (movingOpposite) {
-          // Normalize positions to 0..1 from the perspective of p1's source
           const p1Pos = p1.progress;
-          // p2 is at p2.progress from ITS source, which is p1's target.
-          // So p2's position relative to p1's source is (1 - p2.progress).
           const p2Pos = 1 - p2.progress;
-          
           const distProgress = Math.abs(p1Pos - p2Pos);
           
-          // Use the absolute-distance calibrated threshold
           if (distProgress < collisionThreshold) {
             payloadsToRemove.add(p1.id);
             payloadsToRemove.add(p2.id);
@@ -274,13 +268,13 @@ export const advanceGameState = (
     }
   }
 
-  // 6. Arrival Logic
-  const nodeUpdates = new Map<string, { count: number, owner: PlayerColor }>();
+  // 6. Arrival Logic (Impacts)
+  const nodeUpdates = new Map<string, { count: number, owner: PlayerColor, prevOwner: PlayerColor, captureProgress: number }>();
   
   const getLatestNodeState = (id: string) => {
     if (nodeUpdates.has(id)) return nodeUpdates.get(id)!;
     const n = newNodes.find(node => node.id === id)!;
-    return { count: n.count, owner: n.owner };
+    return { count: n.count, owner: n.owner, prevOwner: n.prevOwner || n.owner, captureProgress: n.captureProgress };
   };
 
   newPayloads.forEach(p => {
@@ -291,16 +285,55 @@ export const advanceGameState = (
       const target = newNodes.find(n => n.id === p.targetId);
       
       if (target) {
-        const { count, owner } = getLatestNodeState(target.id);
+        const currentState = getLatestNodeState(target.id);
+        
+        // --- VISUAL EVENT GENERATION ---
+        // Calculate impact angle
+        const dx = p.endX - p.startX;
+        const dy = p.endY - p.startY;
+        const angle = Math.atan2(dy, dx);
+        
+        // Calculate force.
+        // Impact should be stronger if node is small, weaker if node is huge.
+        // Base force = 0.5.
+        // Mass = node.count + 50 roughly.
+        // This is purely for the visual wobble.
+        const mass = Math.max(20, currentState.count);
+        const force = Math.min(1.0, 30 / mass); 
 
-        if (owner === p.owner) {
-          nodeUpdates.set(target.id, { count: count + p.count, owner });
+        currentEvents.push({
+            type: 'IMPACT',
+            targetId: target.id,
+            angle: angle,
+            force: force,
+            color: p.owner
+        });
+
+        // --- GAMEPLAY LOGIC ---
+
+        if (currentState.owner === p.owner) {
+          // Reinforcement
+          nodeUpdates.set(target.id, { 
+              ...currentState, 
+              count: currentState.count + p.count 
+          });
         } else {
-          const result = count - p.count;
+          // Attack
+          const result = currentState.count - p.count;
           if (result < 0) {
-            nodeUpdates.set(target.id, { count: Math.abs(result), owner: p.owner });
+            // Captured!
+            nodeUpdates.set(target.id, { 
+                count: Math.abs(result), 
+                owner: p.owner,
+                prevOwner: currentState.owner, // Store old owner for animation
+                captureProgress: 0 // Reset animation
+            });
           } else {
-            nodeUpdates.set(target.id, { count: result, owner });
+            // Damaged
+            nodeUpdates.set(target.id, { 
+                ...currentState,
+                count: result 
+            });
           }
         }
       }
@@ -313,7 +346,13 @@ export const advanceGameState = (
     newNodes = newNodes.map(n => {
       if (nodeUpdates.has(n.id)) {
         const update = nodeUpdates.get(n.id)!;
-        return { ...n, count: update.count, owner: update.owner };
+        return { 
+            ...n, 
+            count: update.count, 
+            owner: update.owner,
+            prevOwner: update.prevOwner,
+            captureProgress: update.captureProgress
+        };
       }
       return n;
     });
@@ -326,11 +365,12 @@ export const advanceGameState = (
       nodes: newNodes,
       edges: newEdges,
       payloads: survivedPayloads,
-      transfers: newTransfers
+      transfers: newTransfers,
+      latestEvents: currentEvents
     },
     lastAITime: updatedLastAITime,
     nextEventTime: updatedNextEventTime,
-    hasChanges: hasChanges || edgesChanged
+    hasChanges: hasChanges || edgesChanged || currentEvents.length > 0
   };
 };
 

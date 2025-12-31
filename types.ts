@@ -19,6 +19,10 @@ export interface Node {
   capacity: number;
   radius: number;
   growthAccumulator: number; // For sub-integer growth handling
+  
+  // Visual State
+  captureProgress: number; // 0 to 1. 1 means fully settled color.
+  prevOwner: PlayerColor; // The color being replaced (for ink effect)
 }
 
 export type EdgeType = 'PERMANENT' | 'RANDOM';
@@ -57,13 +61,23 @@ export interface ActiveTransfer {
   endY: number;
 }
 
+// Visual Events (Transient, cleared every tick)
+export interface GameEvent {
+  type: 'IMPACT';
+  targetId: string;
+  angle: number; // Radian direction of impact
+  force: number; // 0 to 1 scale
+  color: PlayerColor; // Color of the projectile
+}
+
 export type GameState = 'MENU' | 'TUTORIAL' | 'PLAYING' | 'PAUSED' | 'VICTORY' | 'DEFEAT';
 
 export interface GameWorld {
   nodes: Node[];
   edges: Edge[];
   payloads: TravelPayload[];
-  transfers: ActiveTransfer[]; // New: Track ongoing streams of units
+  transfers: ActiveTransfer[];
+  latestEvents: GameEvent[]; // New: For tracking impacts between frames
 }
 
 export interface TutorialStep {
