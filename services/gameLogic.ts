@@ -95,7 +95,7 @@ export const generateHoneycombMap = (playerColor: PlayerColor): { nodes: Node[],
   
   // Hex Grid Configuration
   const mapRadius = 3; // 0 (center) + 3 rings = 37 nodes total
-  const hexSize = 85; // Pixel spacing
+  const hexSize = 72; // Pixel spacing (Reduced from 85 to fit screen better)
   const centerX = GAME_WIDTH / 2;
   const centerY = GAME_HEIGHT / 2;
   
