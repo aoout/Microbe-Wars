@@ -1,9 +1,9 @@
 
 import React from 'react';
 import { Activity, Cpu, Globe, Hexagon, Shuffle } from 'lucide-react';
-import { PlayerColor, DifficultyLevel, GameMode } from '../types';
-import { COLOR_MAP, PLAYABLE_COLORS, DIFFICULTY_SETTINGS } from '../constants';
-import MicrobioLogo from './MicrobioLogo';
+import { PlayerColor, DifficultyLevel, GameMode } from '../../types';
+import { COLOR_MAP, PLAYABLE_COLORS, DIFFICULTY_SETTINGS } from '../../constants';
+import MicrobioLogo from '../ui/MicrobioLogo';
 
 interface MainMenuProps {
   playerColor: PlayerColor;

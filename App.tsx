@@ -1,10 +1,11 @@
+
 import React from 'react';
 import { useGameEngine } from './hooks/useGameEngine';
-import GameMap from './components/GameMap';
-import StatsWidget from './components/StatsWidget';
-import MainMenu from './components/MainMenu';
-import GameOverScreen from './components/GameOverScreen';
-import TutorialOverlay from './components/TutorialOverlay';
+import GameMap from './components/game/GameMap';
+import StatsWidget from './components/game/StatsWidget';
+import MainMenu from './components/screens/MainMenu';
+import GameOverScreen from './components/screens/GameOverScreen';
+import TutorialOverlay from './components/ui/TutorialOverlay';
 
 const App: React.FC = () => {
   const {
@@ -14,6 +15,8 @@ const App: React.FC = () => {
     setPlayerColor,
     difficulty,
     setDifficulty,
+    gameMode,
+    setGameMode,
     nextCurrentTime,
     startGame,
     resetGame,
@@ -37,6 +40,8 @@ const App: React.FC = () => {
           setPlayerColor={setPlayerColor}
           difficulty={difficulty}
           setDifficulty={setDifficulty}
+          gameMode={gameMode}
+          setGameMode={setGameMode}
           startGame={startGame}
           hasCompletedTutorial={hasCompletedTutorial}
         />

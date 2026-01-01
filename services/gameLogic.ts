@@ -1,6 +1,6 @@
 
 import { forceSimulation, forceManyBody, forceCollide, forceX, forceY, SimulationNodeDatum } from 'd3-force';
-import { Node, Edge, PlayerColor, GameWorld, DifficultyLevel } from '../types';
+import { Node, Edge, PlayerColor, GameWorld, DifficultyLevel, NodeType } from '../types';
 import { GAME_WIDTH, GAME_HEIGHT, INITIAL_PLAYER_COUNT, NODE_RADIUS_BASE, PLAYABLE_COLORS, MAX_CAPACITY_BASE, BASE_SPAWN_INTERVAL_MS, DIFFICULTY_SETTINGS } from '../constants';
 
 // --- Map Generation ---
@@ -56,7 +56,8 @@ export const generateMap = (playerColor: PlayerColor): { nodes: Node[], edges: E
     radius: n.r, // Base radius stored here
     growthAccumulator: 0, // Init accumulator
     captureProgress: 1, // Start fully settled
-    prevOwner: PlayerColor.GRAY
+    prevOwner: PlayerColor.GRAY,
+    type: 'DEFAULT'
   }));
 
   // 4. Create Edges (MST + Random)
@@ -85,6 +86,242 @@ export const generateMap = (playerColor: PlayerColor): { nodes: Node[], edges: E
   return { nodes, edges };
 };
 
+// --- Honeycomb Map Generation (New Mode) ---
+
+export const generateHoneycombMap = (playerColor: PlayerColor): { nodes: Node[], edges: Edge[] } => {
+  const nodes: Node[] = [];
+  const edges: Edge[] = [];
+  const nodeLayerMap = new Map<string, number>(); // Track which layer each node is in
+  
+  // Hex Grid Configuration
+  const mapRadius = 3; // 0 (center) + 3 rings = 37 nodes total
+  const hexSize = 85; // Pixel spacing
+  const centerX = GAME_WIDTH / 2;
+  const centerY = GAME_HEIGHT / 2;
+  
+  // Helper to convert Axial coords to Screen Coords
+  // Pointy-topped hex orientation
+  const hexToPixel = (q: number, r: number) => {
+    const x = hexSize * (Math.sqrt(3) * q + (Math.sqrt(3)/2) * r);
+    const y = hexSize * ((3/2) * r);
+    return { x: centerX + x, y: centerY + y };
+  };
+
+  // 1. Generate Grid Nodes
+  // Constraint for hexagonal shape: max(abs(q), abs(r), abs(-q-r)) <= mapRadius
+  for (let q = -mapRadius; q <= mapRadius; q++) {
+    for (let r = -mapRadius; r <= mapRadius; r++) {
+      const s = -q - r;
+      if (Math.abs(q) <= mapRadius && Math.abs(r) <= mapRadius && Math.abs(s) <= mapRadius) {
+        
+        const pos = hexToPixel(q, r);
+        
+        // Determine "Layer" (Distance from center)
+        const distance = Math.max(Math.abs(q), Math.abs(r), Math.abs(s));
+        const id = `hex-${q}-${r}`;
+        
+        nodeLayerMap.set(id, distance);
+
+        // Determine capacity based on layer (Center is juicier)
+        const baseCap = MAX_CAPACITY_BASE;
+        const cap = distance === 0 ? baseCap * 1.5 : baseCap;
+
+        nodes.push({
+          id: id,
+          x: pos.x,
+          y: pos.y,
+          owner: PlayerColor.GRAY,
+          count: distance === 0 ? 50 : (10 + Math.floor(Math.random() * 10)), // Center is stronger neutral
+          capacity: cap,
+          radius: NODE_RADIUS_BASE,
+          growthAccumulator: 0,
+          captureProgress: 1,
+          prevOwner: PlayerColor.GRAY,
+          type: 'DEFAULT'
+        });
+      }
+    }
+  }
+
+  // 2. Generate Edges Logic
+  
+  // A. Identify Neighbors (Physics based check is simplest and robust)
+  const connectionThreshold = hexSize * 1.8; 
+  interface PotentialEdge { s: string, t: string, l1: number, l2: number, dist: number }
+  const potentials: PotentialEdge[] = [];
+
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const n1 = nodes[i];
+      const n2 = nodes[j];
+      const dist = Math.hypot(n1.x - n2.x, n1.y - n2.y);
+      
+      if (dist < connectionThreshold) {
+        potentials.push({
+            s: n1.id,
+            t: n2.id,
+            l1: nodeLayerMap.get(n1.id)!,
+            l2: nodeLayerMap.get(n2.id)!,
+            dist
+        });
+      }
+    }
+  }
+
+  // B. Selection Rules
+  // Rule 1: Outer Layer (Layer 3) Full Connectivity
+  // Rule 2: Inter-layer (0-1, 1-2, 2-3) must have at least one connection.
+  // Strategy: Randomly select subset (e.g. 40%), then patch to ensure rules.
+
+  const selectedEdges = new Set<string>(); // Keep track to avoid dupes: "id1-id2" sorted
+  const addEdge = (s: string, t: string) => {
+      const key = s < t ? `${s}-${t}` : `${t}-${s}`;
+      if (!selectedEdges.has(key)) {
+          selectedEdges.add(key);
+          edges.push({ source: s, target: t, type: 'PERMANENT' });
+      }
+  };
+
+  const interLayerCandidates: Record<string, PotentialEdge[]> = {
+      "0-1": [],
+      "1-2": [],
+      "2-3": []
+  };
+
+  for (const p of potentials) {
+      const minL = Math.min(p.l1, p.l2);
+      const maxL = Math.max(p.l1, p.l2);
+      const isSameLayer = minL === maxL;
+      
+      // Store Inter-layer candidates for validation later
+      if (!isSameLayer && maxL - minL === 1) {
+          interLayerCandidates[`${minL}-${maxL}`].push(p);
+      }
+
+      // RULE 1: Outermost Ring is Fully Connected
+      if (p.l1 === 3 && p.l2 === 3) {
+          addEdge(p.s, p.t);
+          continue;
+      }
+
+      // Random Selection for everything else
+      // Adjust density: 40% chance
+      if (Math.random() < 0.4) {
+          addEdge(p.s, p.t);
+      }
+  }
+
+  // C. Validate & Patch Inter-layer Connections (Rules 2 & 3)
+  // Ensure "Every layer has at least one node connected to inner/outer"
+  // This essentially means global connectivity between layers.
+  
+  ["0-1", "1-2", "2-3"].forEach(key => {
+      const candidates = interLayerCandidates[key];
+      // Check if we have ANY edge currently selected from this candidate list
+      const hasConnection = candidates.some(p => {
+          const k = p.s < p.t ? `${p.s}-${p.t}` : `${p.t}-${p.s}`;
+          return selectedEdges.has(k);
+      });
+
+      if (!hasConnection && candidates.length > 0) {
+          // Force add a random one
+          const pick = candidates[Math.floor(Math.random() * candidates.length)];
+          addEdge(pick.s, pick.t);
+      }
+  });
+
+  // D. Connectivity Check (Bridge Islands)
+  // Since we randomized, we might have isolated islands (especially in layer 2 or 1).
+  // Simple Disjoint Set to connect everything
+  const ds = new DisjointSet(nodes.length);
+  const nodeIdToIndex = new Map(nodes.map((n, i) => [n.id, i]));
+  
+  edges.forEach(e => {
+      ds.union(nodeIdToIndex.get(e.source)!, nodeIdToIndex.get(e.target)!);
+  });
+
+  // Iterate potentials again to bridge disconnected components
+  // Prefer short connections (which all potentials are)
+  for (const p of potentials) {
+      const idx1 = nodeIdToIndex.get(p.s)!;
+      const idx2 = nodeIdToIndex.get(p.t)!;
+      if (!ds.connected(idx1, idx2)) {
+          ds.union(idx1, idx2);
+          addEdge(p.s, p.t);
+      }
+  }
+
+  // 3. Assign Spawns Symmetrically
+  const outerNodes = nodes.filter(n => nodeLayerMap.get(n.id) === 3);
+  outerNodes.sort((a, b) => {
+    const angA = Math.atan2(a.y - centerY, a.x - centerX);
+    const angB = Math.atan2(b.y - centerY, b.x - centerX);
+    return angA - angB;
+  });
+
+  const spawnIndices = [
+    0,
+    Math.floor(outerNodes.length * 0.25),
+    Math.floor(outerNodes.length * 0.5),
+    Math.floor(outerNodes.length * 0.75)
+  ];
+
+  const opponents = [PlayerColor.RED, PlayerColor.BLUE, PlayerColor.GREEN, PlayerColor.PURPLE]
+     .filter(c => c !== playerColor)
+     .slice(0, 3); 
+  
+  const activeColors = [playerColor, ...opponents];
+  const occupiedIds = new Set<string>();
+
+  activeColors.forEach((color, i) => {
+    if (i < spawnIndices.length) {
+       const targetNode = outerNodes[spawnIndices[i]];
+       if (targetNode) {
+          targetNode.owner = color;
+          targetNode.prevOwner = color;
+          targetNode.count = 30; 
+          occupiedIds.add(targetNode.id);
+       }
+    }
+  });
+
+  // 4. Assign Special Node Types (Fortress & Hive)
+  // Only assign to neutral nodes that are NOT the center (too OP) and NOT occupied
+  const eligibleNeutrals = nodes.filter(n => 
+    n.owner === PlayerColor.GRAY && 
+    !occupiedIds.has(n.id) && 
+    nodeLayerMap.get(n.id) !== 0
+  );
+
+  // Shuffle eligible neutrals
+  for (let i = eligibleNeutrals.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [eligibleNeutrals[i], eligibleNeutrals[j]] = [eligibleNeutrals[j], eligibleNeutrals[i]];
+  }
+
+  // Assign 1-2 Fortress
+  const fortressCount = 1 + Math.floor(Math.random() * 2); // 1 or 2
+  let cursor = 0;
+  
+  for (let i=0; i<fortressCount; i++) {
+      if (cursor < eligibleNeutrals.length) {
+          eligibleNeutrals[cursor].type = 'FORTRESS';
+          cursor++;
+      }
+  }
+
+  // Assign 1-2 Hive
+  const hiveCount = 1 + Math.floor(Math.random() * 2); // 1 or 2
+  for (let i=0; i<hiveCount; i++) {
+      if (cursor < eligibleNeutrals.length) {
+          eligibleNeutrals[cursor].type = 'HIVE';
+          cursor++;
+      }
+  }
+
+  return { nodes, edges };
+};
+
 // --- Tutorial Map Generation ---
 
 export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], edges: Edge[] } => {
@@ -92,8 +329,7 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
     const centerX = GAME_WIDTH / 2;
     const centerY = GAME_HEIGHT / 2;
 
-    // 1. Define the "Story Nodes" (Fixed positions in the center in a triangle)
-    // Positioned to be clearly visible but integrated into the map
+    // 1. Define the "Story Nodes"
     const storyNodes: Node[] = [
         {
             id: 'tutorial-player',
@@ -105,7 +341,8 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             radius: NODE_RADIUS_BASE,
             growthAccumulator: 0,
             captureProgress: 1,
-            prevOwner: playerColor
+            prevOwner: playerColor,
+            type: 'DEFAULT'
         },
         {
             id: 'tutorial-neutral',
@@ -117,7 +354,8 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             radius: NODE_RADIUS_BASE,
             growthAccumulator: 0,
             captureProgress: 1,
-            prevOwner: PlayerColor.GRAY
+            prevOwner: PlayerColor.GRAY,
+            type: 'DEFAULT'
         },
         {
             id: 'tutorial-enemy',
@@ -130,13 +368,13 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             growthAccumulator: 0,
             captureProgress: 1,
             prevOwner: PlayerColor.RED === playerColor ? PlayerColor.BLUE : PlayerColor.RED,
+            type: 'DEFAULT'
         }
     ];
 
     nodes.push(...storyNodes);
 
-    // 2. Generate "Background Nodes" (Fixed Layout - Spiral)
-    // This ensures the map looks "real" and dense (24 total nodes) but is identical every time.
+    // 2. Generate "Background Nodes"
     const bgNodeCount = 21; 
     let currentAngle = 0;
     let currentRadius = 300; 
@@ -159,7 +397,8 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             radius: NODE_RADIUS_BASE,
             growthAccumulator: 0,
             captureProgress: 1,
-            prevOwner: PlayerColor.GRAY
+            prevOwner: PlayerColor.GRAY,
+            type: 'DEFAULT'
         });
 
         // Spiral out logic
@@ -168,16 +407,11 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
     }
 
     // 3. Generate Edges
-    // First, force the tutorial triangle connection (Permanent)
     const edges: Edge[] = [];
     
-    // Player <-> Neutral
     edges.push({ source: 'tutorial-player', target: 'tutorial-neutral', type: 'PERMANENT' });
-    // Neutral <-> Enemy
     edges.push({ source: 'tutorial-neutral', target: 'tutorial-enemy', type: 'PERMANENT' });
     
-    // Connect background nodes to each other and loosely to the center to form a "Mesh"
-    // We use a simple distance-based connector but deterministic-ish
     const allNodes = nodes;
     
     for (let i = 0; i < allNodes.length; i++) {
@@ -186,23 +420,18 @@ export const generateTutorialMap = (playerColor: PlayerColor): { nodes: Node[], 
             const n2 = allNodes[j];
             const d = Math.hypot(n1.x - n2.x, n1.y - n2.y);
             
-            // Connect close nodes, but don't mess up the tutorial flow too much
-            // Only add extra edges if they are reasonably close
             if (d < 180) {
-                 // Avoid adding edges that short-circuit the tutorial path (Player -> Enemy direct)
                  if ((n1.id === 'tutorial-player' && n2.id === 'tutorial-enemy') || 
                      (n1.id === 'tutorial-enemy' && n2.id === 'tutorial-player')) {
                      continue;
                  }
                  
-                 // Avoid duplicate edges
                  const exists = edges.some(e => 
                     (e.source === n1.id && e.target === n2.id) || 
                     (e.source === n2.id && e.target === n1.id)
                  );
                  
                  if (!exists) {
-                    // Make most background edges random to show off the mechanic, some permanent
                     edges.push({ 
                         source: n1.id, 
                         target: n2.id, 
@@ -227,7 +456,6 @@ const generateEdgesForNodes = (nodes: Node[]): Edge[] => {
       potentialEdges.push({ s: i, t: j, d: dist(nodes[i], nodes[j]) });
     }
   }
-  // Sort by distance for MST construction (Kruskal's algorithm)
   potentialEdges.sort((a, b) => a.d - b.d);
 
   const edges: Edge[] = [];
@@ -245,11 +473,9 @@ const generateEdgesForNodes = (nodes: Node[]): Edge[] => {
   const extraEdgesNeeded = Math.floor(nodes.length * 0.5);
   let extraAdded = 0;
 
-  // We iterate through potential edges again. 
   for (const edge of potentialEdges) {
     if (extraAdded >= extraEdgesNeeded) break;
     
-    // Check if edge exists
     const exists = edges.some(e => 
       (e.source === nodes[edge.s].id && e.target === nodes[edge.t].id) ||
       (e.source === nodes[edge.t].id && e.target === nodes[edge.s].id)
@@ -269,10 +495,8 @@ const generateEdgesForNodes = (nodes: Node[]): Edge[] => {
 // --- Topology Regeneration ---
 
 export const regenerateTopology = (nodes: Node[], currentEdges: Edge[]): Edge[] => {
-  // 1. Keep Permanent Edges
   const permanentEdges = currentEdges.filter(e => e.type === 'PERMANENT');
   
-  // 2. Generate Potential Edges again
   const dist = (a: Node, b: Node) => Math.hypot(a.x - b.x, a.y - b.y);
   
   const potentialEdges: {s: number, t: number, d: number}[] = [];
@@ -281,19 +505,14 @@ export const regenerateTopology = (nodes: Node[], currentEdges: Edge[]): Edge[] 
       potentialEdges.push({ s: i, t: j, d: dist(nodes[i], nodes[j]) });
     }
   }
-  // Sort by distance to prioritize closer connections
   potentialEdges.sort((a, b) => a.d - b.d);
 
   const newEdges = [...permanentEdges];
-  // Increase to 50%
   const extraEdgesNeeded = Math.floor(nodes.length * 0.5);
   let extraAdded = 0;
 
-  // Add random edges, but shuffle the potential list slightly or just use a random selection mechanism
-  // To make it truly "random" but still sane (not too far), we can filter by max distance then shuffle
   const validCandidates = potentialEdges.filter(e => e.d < 400);
   
-  // Shuffle candidates
   for (let i = validCandidates.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [validCandidates[i], validCandidates[j]] = [validCandidates[j], validCandidates[i]];
@@ -302,7 +521,6 @@ export const regenerateTopology = (nodes: Node[], currentEdges: Edge[]): Edge[] 
   for (const edge of validCandidates) {
     if (extraAdded >= extraEdgesNeeded) break;
 
-    // Check if edge exists in permanent list
     const exists = newEdges.some(e => 
       (e.source === nodes[edge.s].id && e.target === nodes[edge.t].id) ||
       (e.source === nodes[edge.t].id && e.target === nodes[edge.s].id)
@@ -319,51 +537,21 @@ export const regenerateTopology = (nodes: Node[], currentEdges: Edge[]): Edge[] 
 
 // --- Physics / Math Helpers ---
 
-/**
- * Calculates how much a node should grow in a single tick.
- * Formula: Base + (Base * 0.5 * log10(Count))
- * Meaning: 10 units = 1.5x speed, 100 units = 2.0x speed.
- */
 export const calculateGrowthIncrement = (count: number, baseGrowthPerTick: number): number => {
   if (count <= 1) return baseGrowthPerTick;
-  
-  // Log10 provides a nice slow curve.
   const sizeBonus = Math.log10(count) * 0.5;
   return baseGrowthPerTick * (1 + sizeBonus);
 };
 
-/**
- * Calculates the speed of a unit leaving a node.
- * Formula: Base * (1 + 0.2 * ln(Count))
- * Meaning: 10 units = ~1.46x speed, 100 units = ~1.92x speed.
- * @param baseSpeed - Can be fractional (0.01) or pixels per tick (e.g. 5)
- */
 export const calculateUnitSpeed = (nodeCount: number, baseSpeed: number): number => {
   if (nodeCount <= 1) return baseSpeed;
-
-  // Natural Log (Math.log) grows slightly faster initially than log10 but is standard for nature
   const speedMultiplier = 1 + (Math.log(nodeCount) * 0.2);
   return baseSpeed * speedMultiplier;
 };
 
-/**
- * Calculates the time interval between unit spawns.
- * Returns time in ms.
- * As count increases, interval decreases (diminishing returns).
- */
 export const calculateSpawnInterval = (count: number): number => {
-  // Prevent Infinity/NaN. Using log growth for rate means 1/(log) for interval.
   const safeCount = Math.max(1, count);
-  
-  // Formula: BASE / (1 + ln(count))
-  // With Base 500:
-  // Count 1: 500ms
-  // Count 10: 151ms
-  // Count 50: 102ms
-  // Count 100: 89ms
   const interval = BASE_SPAWN_INTERVAL_MS / (1 + Math.log(safeCount));
-  
-  // Clamp to a minimum speed to prevent game engine overload or instant-drain
   return Math.max(40, interval);
 };
 
@@ -400,29 +588,19 @@ export const calculateAIMoves = (
   const { nodes, edges } = world;
   const config = DIFFICULTY_SETTINGS[difficulty];
 
-  // Identify all nodes controlled by AI 
-  // If isPlayerAutoPilot is true, we include the player color in the AI calculation
   const aiNodes = nodes.filter(n => 
     n.owner !== PlayerColor.GRAY && 
     (isPlayerAutoPilot || n.owner !== playerColor) && 
     PLAYABLE_COLORS.includes(n.owner)
   );
   
-  // Shuffle AI nodes to randomize action order slightly
-  // This is crucial for lower difficulties: we only pick the first N nodes after shuffle to "simulate" limited attention
   const shuffledAiNodes = aiNodes.sort(() => 0.5 - Math.random());
-
-  // LIMIT: Max Actions Per Tick (Attention Span)
   const actingNodes = shuffledAiNodes.slice(0, config.maxActionsPerTick === Infinity ? shuffledAiNodes.length : config.maxActionsPerTick);
 
   actingNodes.forEach(source => {
-    // 0. Hesitation Check (Simulated human error/slowness)
     if (Math.random() < config.hesitationChance) return;
-
-    // 1. Basic Check: Must have enough units to be effective
     if (source.count < 10) return;
 
-    // 2. Identify Neighbors
     const connectedIds = new Set<string>();
     edges.forEach(e => {
       if (e.source === source.id) connectedIds.add(e.target);
@@ -430,75 +608,51 @@ export const calculateAIMoves = (
     });
     const neighbors = nodes.filter(n => connectedIds.has(n.id));
 
-    // 3. Score Targets
     let bestTarget: Node | null = null;
     let bestScore = -Infinity;
-
-    // SATURATION PRESSURE
-    // Even though nodes have infinite capacity, we treat the 'capacity' field as a "soft limit" or "ideal density".
-    // If a node is saturated (> 100% capacity), it becomes highly aggressive to "vent" units.
     const saturation = source.count / source.capacity; 
 
     neighbors.forEach(target => {
       let score = -Infinity;
-      
       const isNeutral = target.owner === PlayerColor.GRAY;
-      const isEnemy = target.owner !== source.owner && !isNeutral; // Treats Player and other AI equally
+      const isEnemy = target.owner !== source.owner && !isNeutral; 
       const isFriendly = target.owner === source.owner;
 
       if (isNeutral) {
-        // High Priority: Expansion. Neutrals don't grow, so they are free real estate.
-        // Prefer closer neutrals or ones with low count.
         score = 100 - target.count; 
+        if (saturation > 0.8) score += 50;
         
-        // If we are overflowing, any expansion is good expansion
-        if (saturation > 0.8) {
-           score += 50;
-        }
+        // AI Logic: Prefer Hive or Fortress nodes slightly
+        if (target.type === 'HIVE') score += 40;
+        if (target.type === 'FORTRESS') score += 30;
 
       } else if (isEnemy) {
-        // Combat Priority.
         const diff = source.count - target.count;
         
-        // Base logic: Do we have more units?
-        // Note: Infinite growth means enemies can be HUGE.
-        
-        if (saturation > 0.9) {
-          // BERSERK MODE (Attrition Strategy)
-          // If we are full, we MUST attack to utilize our production.
-          // We flatten the penalty for attacking larger enemies.
-          // score = Base Motivation (100) + Scaled Difference.
-          // Example: AI(150) vs Enemy(1000). Diff = -850. Score = 100 - 85 = 15. (Positive!)
-          score = 100 + (diff * 0.1);
+        // AI Logic: Fear Fortresses if not overwhelming
+        if (target.type === 'FORTRESS') {
+           // Effective HP is double, so effective difference is worse
+           const effectiveEnemyCount = target.count * 2;
+           const effectiveDiff = source.count - effectiveEnemyCount;
+           if (effectiveDiff > 0) score = 30 + effectiveDiff;
+           else score = -500; // Avoid unless huge advantage
         } else {
-          // STANDARD MODE
-          // Be careful. Only attack if we can win or nearly win.
-          if (diff > 0) {
-            score = 50 + diff; // Aggressive if winning
-          } else {
-            // If we are losing, avoid suicide... unless it's close (-10)
-            score = diff > -10 ? -20 : -1000; 
-          }
+            if (saturation > 0.9) {
+                score = 100 + (diff * 0.1);
+            } else {
+                if (diff > 0) score = 50 + diff;
+                else score = diff > -10 ? -20 : -1000; 
+            }
         }
         
       } else if (isFriendly) {
-        // Support Priority.
-        // Help friends who are low.
-        if (target.count < 15) {
-          score = 50 + (15 - target.count);
-        } else if (target.count < target.capacity * 0.5) {
-          score = 10; // Top up
-        } else {
-          score = -50; // Don't over-cluster units, spread them out
-        }
+        if (target.count < 15) score = 50 + (15 - target.count);
+        else if (target.count < target.capacity * 0.5) score = 10;
+        else score = -50;
         
-        // Don't send units to an already saturated friend if we are also saturated
-        if (saturation > 0.8 && (target.count / target.capacity) > 0.8) {
-           score = -200;
-        }
+        if (saturation > 0.8 && (target.count / target.capacity) > 0.8) score = -200;
       }
 
-      // Add a little randomness so AI isn't perfectly predictable
       score += Math.random() * 20;
 
       if (score > bestScore) {
@@ -507,13 +661,8 @@ export const calculateAIMoves = (
       }
     });
 
-    // 4. Threshold for action
-    // If we are saturated, we are desperate to act (lower threshold)
     const threshold = saturation > 0.9 ? 10 : 30;
-
     if (bestTarget && bestScore > threshold) {
-       // Limit: Don't let every node attack every single tick if it's borderline.
-       // But if score is high (easy kill), go for it.
        if (bestScore > 50 || Math.random() > 0.3) {
          moves.push({ from: source.id, to: (bestTarget as Node).id });
        }

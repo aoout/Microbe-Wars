@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect, memo } from 'react';
-import { GameWorld, Node, Edge } from '../types';
-import { COLOR_MAP, GAME_HEIGHT, GAME_WIDTH, NODE_RADIUS_BASE } from '../constants';
+import { GameWorld, Node, Edge } from '../../types';
+import { COLOR_MAP, GAME_HEIGHT, GAME_WIDTH, NODE_RADIUS_BASE } from '../../constants';
 import { Activity, Bot, Pause, Play } from 'lucide-react';
 
 // --- Sub-components ---
@@ -109,15 +109,46 @@ interface NodePhysicsState {
 
 // --- Helper Functions for Shapes ---
 
-const getTrianglePath = (cx: number, cy: number, r: number) => {
-  // Equilateral triangle pointing up
-  const angles = [
-    -Math.PI / 2, // Top
-    -Math.PI / 2 + (2 * Math.PI) / 3, // Bottom Right
-    -Math.PI / 2 + (4 * Math.PI) / 3  // Bottom Left
-  ];
-  const points = angles.map(a => `${(cx + r * Math.cos(a)).toFixed(2)},${(cy + r * Math.sin(a)).toFixed(2)}`);
-  return `M ${points[0]} L ${points[1]} L ${points[2]} Z`;
+// Generate a symmetric 3-claw/petal shape rotated around center
+const getHiveClawPath = (cx: number, cy: number, r: number, rotation: number) => {
+    // A teardrop/claw shape pointing outwards
+    // We construct one at 0 degrees (pointing right), then rotate it
+    
+    // Convert degrees to radians
+    const rad = (deg: number) => (deg + rotation) * (Math.PI / 180);
+
+    const outerTip = { x: cx + r * Math.cos(rad(0)), y: cy + r * Math.sin(rad(0)) };
+    const innerLeft = { x: cx + (r*0.4) * Math.cos(rad(-40)), y: cy + (r*0.4) * Math.sin(rad(-40)) };
+    const innerRight = { x: cx + (r*0.4) * Math.cos(rad(40)), y: cy + (r*0.4) * Math.sin(rad(40)) };
+    const control1 = { x: cx + (r*0.8) * Math.cos(rad(-20)), y: cy + (r*0.8) * Math.sin(rad(-20)) };
+    const control2 = { x: cx + (r*0.8) * Math.cos(rad(20)), y: cy + (r*0.8) * Math.sin(rad(20)) };
+
+    return `
+      M ${innerLeft.x},${innerLeft.y}
+      Q ${control1.x},${control1.y} ${outerTip.x},${outerTip.y}
+      Q ${control2.x},${control2.y} ${innerRight.x},${innerRight.y}
+      Z
+    `;
+};
+
+// Generate an Octagon / Cut-corner square
+const getFortressPath = (cx: number, cy: number, r: number) => {
+    const d = r * 2; // full width
+    const c = d * 0.3; // corner cut size
+    const x = cx - r;
+    const y = cy - r;
+    
+    return `
+      M ${x + c},${y} 
+      L ${x + d - c},${y} 
+      L ${x + d},${y + c} 
+      L ${x + d},${y + d - c} 
+      L ${x + d - c},${y + d} 
+      L ${x + c},${y + d} 
+      L ${x},${y + d - c} 
+      L ${x},${y + c} 
+      Z
+    `;
 };
 
 // --- Main Component ---
@@ -534,6 +565,17 @@ const GameMap: React.FC<GameMapProps> = ({
              <circle cx="20" cy="20" r="1.5" fill="#334155" opacity="0.3" />
              <circle cx="70" cy="60" r="1" fill="#334155" opacity="0.2" />
           </pattern>
+
+          {/* New Textures for Special Nodes */}
+          <pattern id="hex-plate" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+             <rect width="10" height="10" fill="none" />
+             <path d="M 0 5 L 10 5 M 5 0 L 5 10" stroke="white" strokeWidth="1" opacity="0.15" />
+          </pattern>
+          
+          <pattern id="bio-goo" width="6" height="6" patternUnits="userSpaceOnUse">
+             <circle cx="2" cy="2" r="1.5" fill="black" opacity="0.2" />
+             <circle cx="5" cy="5" r="1" fill="black" opacity="0.1" />
+          </pattern>
           
           {/* Organic Cell Gradients & Ink Transitions */}
           {world.nodes.map(node => (
@@ -562,6 +604,14 @@ const GameMap: React.FC<GameMapProps> = ({
           
           <filter id="glow-soft">
             <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+
+          <filter id="glow-strong">
+            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
             <feMerge>
                 <feMergeNode in="coloredBlur"/>
                 <feMergeNode in="SourceGraphic"/>
@@ -661,115 +711,156 @@ const GameMap: React.FC<GameMapProps> = ({
             let selectionElement = null;
 
             if (node.type === 'FORTRESS') {
-               // Square Shape
-               const side = displayRadius * 0.9 * 2; // Slightly smaller than diameter to visual weight match
-               const x = node.x - side / 2;
-               const y = node.y - side / 2;
-               const rx = side * 0.15; // Rounded corners
-
-               const commonProps = {
-                   x, y, width: side, height: side, rx
-               };
+               // --- FORTRESS: Heavy Industrial Bunker ---
+               const r = displayRadius * 0.95;
+               const fortressPath = getFortressPath(node.x, node.y, r);
+               const platingPath = getFortressPath(node.x, node.y, r * 0.7);
 
                shapeElement = (
-                   <rect
-                     {...commonProps}
-                     fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : `url(#cell-body-${node.owner})`}
-                     className="transition-all duration-300"
-                   />
+                   <g>
+                      {/* Heavy Plating (Main Body) with Hex Texture */}
+                      <path
+                        d={fortressPath}
+                        fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color}
+                        fillOpacity={0.8}
+                        stroke={color} strokeWidth={1}
+                      />
+                      <path d={fortressPath} fill="url(#hex-plate)" opacity={0.4} />
+
+                      {/* Inner Raised Platform */}
+                      <path
+                        d={platingPath}
+                        fill={color} fillOpacity={0.3}
+                        stroke={color} strokeWidth={2}
+                      />
+                      
+                      {/* Connection bolts */}
+                      <circle cx={node.x - r*0.7} cy={node.y - r*0.7} r={2} fill="white" opacity={0.8} />
+                      <circle cx={node.x + r*0.7} cy={node.y - r*0.7} r={2} fill="white" opacity={0.8} />
+                      <circle cx={node.x - r*0.7} cy={node.y + r*0.7} r={2} fill="white" opacity={0.8} />
+                      <circle cx={node.x + r*0.7} cy={node.y + r*0.7} r={2} fill="white" opacity={0.8} />
+                   </g>
                );
+               
+               // Outer Shield Rings (Counter Rotating)
                membraneElement = (
-                   <rect
-                     {...commonProps}
-                     fill="none"
-                     stroke={color}
-                     strokeWidth={3} // Thicker for Fortress
-                     strokeOpacity={0.7}
-                     filter="url(#glow-soft)"
-                   />
+                   <g>
+                       <g style={{ transformOrigin: `${node.x}px ${node.y}px` }} className="animate-[spin_10s_linear_infinite]">
+                            <path
+                                d={getFortressPath(node.x, node.y, r + 4)}
+                                fill="none" stroke={color} strokeWidth={1} strokeDasharray="10 10" strokeOpacity={0.6}
+                            />
+                       </g>
+                       <g style={{ transformOrigin: `${node.x}px ${node.y}px` }} className="animate-[spin_15s_linear_reverse_infinite]">
+                            <path
+                                d={getFortressPath(node.x, node.y, r + 8)}
+                                fill="none" stroke={color} strokeWidth={2} strokeDasharray="4 20" strokeOpacity={0.4}
+                            />
+                       </g>
+                   </g>
                );
+
+               // Core Reactor (Stable Energy)
                nucleusElement = (
                    <rect
-                     x={node.x - side * 0.2}
-                     y={node.y - side * 0.2}
-                     width={side * 0.4}
-                     height={side * 0.4}
-                     rx={side * 0.05}
-                     fill="url(#cell-core-general)"
-                     opacity={0.6}
-                     filter="url(#glow-soft)"
-                     className="animate-pulse"
+                     x={node.x - r * 0.25}
+                     y={node.y - r * 0.25}
+                     width={r * 0.5}
+                     height={r * 0.5}
+                     fill="white"
+                     filter="url(#glow-strong)"
+                     className="animate-[pulse_4s_ease-in-out_infinite]"
                    />
                );
+
+               // Selection Box matches Octagon roughly
                selectionElement = (
-                    <rect
-                     x={node.x - side/2 - 8}
-                     y={node.y - side/2 - 8}
-                     width={side + 16}
-                     height={side + 16}
-                     rx={rx + 4}
+                   <path
+                     d={getFortressPath(node.x, node.y, r + 12)}
                      fill="none"
                      stroke={isSelected || isInDragPath ? '#fff' : color}
-                     strokeWidth={1.5}
-                     strokeOpacity={0.8}
-                     strokeDasharray="2 4"
-                     className="animate-[spin_4s_linear_infinite]"
-                     style={{ transformOrigin: `${node.x}px ${node.y}px` }}
+                     strokeWidth={2}
+                     strokeOpacity={0.9}
+                     strokeDasharray="4 4"
+                     className="animate-[pulse_2s_linear_infinite]"
                    />
                );
 
             } else if (node.type === 'HIVE') {
-               // Triangle Shape
-               const r = displayRadius * 1.15; // Slightly larger for visual weight
-               const path = getTrianglePath(node.x, node.y, r);
-               const nucleusPath = getTrianglePath(node.x, node.y, r * 0.4);
-               const selectionPath = getTrianglePath(node.x, node.y, r + 8);
+               // --- HIVE: Zerg-like Organic Hatchery ---
+               const r = displayRadius * 1.3; 
+               
+               // Create 3 symmetric claws/petals
+               const claw0 = getHiveClawPath(node.x, node.y, r, 0);
+               const claw1 = getHiveClawPath(node.x, node.y, r, 120);
+               const claw2 = getHiveClawPath(node.x, node.y, r, 240);
 
                shapeElement = (
-                   <path
-                     d={path}
-                     fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : `url(#cell-body-${node.owner})`}
-                     className="transition-all duration-300"
-                     strokeLinejoin="round"
-                   />
+                   <g className="animate-[spin_12s_linear_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                       {/* Base Pool */}
+                       <circle cx={node.x} cy={node.y} r={r * 0.5} fill={color} fillOpacity={0.4} />
+                       
+                       {/* 3 Rotational Claws */}
+                       <path d={claw0} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
+                       <path d={claw1} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
+                       <path d={claw2} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
+                       
+                       {/* Vein Texture Overlay */}
+                       <path d={claw0} fill="url(#bio-goo)" opacity={0.3} />
+                       <path d={claw1} fill="url(#bio-goo)" opacity={0.3} />
+                       <path d={claw2} fill="url(#bio-goo)" opacity={0.3} />
+                   </g>
                );
+
+               // Outer Membrane Ring (Stable rotation)
                membraneElement = (
-                   <path
-                     d={path}
-                     fill="none"
-                     stroke={color}
-                     strokeWidth={2}
-                     strokeOpacity={0.6}
-                     filter="url(#glow-soft)"
-                     strokeLinejoin="round"
-                   />
+                   <g className="animate-[spin_8s_linear_reverse_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                        <circle cx={node.x} cy={node.y} r={r * 0.8} fill="none" stroke={color} strokeWidth={1} strokeOpacity={0.3} strokeDasharray="2 4" />
+                   </g>
                );
+
+               // Pulsing Heart Core
                nucleusElement = (
-                   <path
-                     d={nucleusPath}
-                     fill="url(#cell-core-general)"
-                     opacity={0.6}
-                     filter="url(#glow-soft)"
-                     className="animate-pulse"
-                     strokeLinejoin="round"
-                   />
+                   <g>
+                        {/* Glow */}
+                       <circle
+                         cx={node.x} cy={node.y} r={r * 0.3}
+                         fill={color}
+                         opacity={0.4}
+                         filter="url(#glow-strong)"
+                         className="animate-[pulse_2s_ease-in-out_infinite]"
+                       />
+                       {/* Solid Core */}
+                       <circle
+                         cx={node.x} cy={node.y} r={r * 0.15}
+                         fill="white"
+                         className="animate-[pulse_1s_ease-in-out_infinite]"
+                       />
+                       
+                       {/* Orbiting Spores */}
+                       <g className="animate-[spin_3s_linear_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                            <circle cx={node.x} cy={node.y - r} r={3} fill={color} filter="url(#glow-soft)" />
+                            <circle cx={node.x + r*0.866} cy={node.y + r*0.5} r={2} fill={color} filter="url(#glow-soft)" />
+                            <circle cx={node.x - r*0.866} cy={node.y + r*0.5} r={2.5} fill={color} filter="url(#glow-soft)" />
+                       </g>
+                   </g>
                );
+
                selectionElement = (
-                   <path
-                     d={selectionPath}
+                   <circle
+                     cx={node.x} cy={node.y} r={r + 8}
                      fill="none"
                      stroke={isSelected || isInDragPath ? '#fff' : color}
-                     strokeWidth={1.5}
-                     strokeOpacity={0.8}
-                     strokeDasharray="2 4"
-                     className="animate-[spin_4s_linear_infinite]"
+                     strokeWidth={2}
+                     strokeOpacity={0.9}
+                     strokeDasharray="2 3"
+                     className="animate-[spin_20s_linear_infinite]"
                      style={{ transformOrigin: `${node.x}px ${node.y}px` }}
-                     strokeLinejoin="round"
                    />
                );
 
             } else {
-               // Default Circle Shape
+               // --- DEFAULT CELL ---
                shapeElement = (
                     <circle
                       cx={node.x} cy={node.y}
@@ -849,7 +940,8 @@ const GameMap: React.FC<GameMapProps> = ({
                 )}
 
                 {/* 3. The Cell (Animated Blob) */}
-                <g className="animate-blob" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                {/* REMOVED animate-blob from parent G to fix wobble/translation issues */}
+                <g style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
                     
                     {/* Main Fill */}
                     {shapeElement}

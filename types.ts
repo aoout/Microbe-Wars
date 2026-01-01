@@ -10,6 +10,10 @@ export enum PlayerColor {
 
 export type DifficultyLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
+export type GameMode = 'CLASSIC' | 'HONEYCOMB';
+
+export type NodeType = 'DEFAULT' | 'FORTRESS' | 'HIVE';
+
 export interface Node {
   id: string;
   x: number;
@@ -19,6 +23,7 @@ export interface Node {
   capacity: number;
   radius: number;
   growthAccumulator: number; // For sub-integer growth handling
+  type: NodeType; // New property
   
   // Visual State
   captureProgress: number; // 0 to 1. 1 means fully settled color.

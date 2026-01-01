@@ -1,5 +1,5 @@
 
-import { GameWorld, PlayerColor, TravelPayload, ActiveTransfer, Node, DifficultyLevel, GameEvent } from '../types';
+import { GameWorld, PlayerColor, TravelPayload, ActiveTransfer, Node, DifficultyLevel, GameEvent, NodeType } from '../types';
 import { 
   calculateGrowthIncrement, 
   calculateUnitSpeed, 
@@ -89,7 +89,13 @@ export const advanceGameState = (
     // B. Biological Growth
     // Neutrals don't grow
     if (updatedNode.owner !== PlayerColor.GRAY) {
-      const growthIncrement = calculateGrowthIncrement(updatedNode.count, baseGrowthPerTick);
+      let growthIncrement = calculateGrowthIncrement(updatedNode.count, baseGrowthPerTick);
+      
+      // HIVE BONUS: +60% Growth Efficiency
+      if (updatedNode.type === 'HIVE') {
+          growthIncrement *= 1.6;
+      }
+
       const newAccumulator = (updatedNode.growthAccumulator || 0) + growthIncrement;
       
       if (newAccumulator >= 1) {
@@ -100,8 +106,6 @@ export const advanceGameState = (
         hasChanges = true;
       } else {
         updatedNode.growthAccumulator = newAccumulator;
-        // FIX: We must flag the node as changed so the new accumulator value is returned,
-        // even if we don't trigger a global re-render (hasChanges remains false for this case).
         nodeChanged = true; 
       }
     }
@@ -269,12 +273,12 @@ export const advanceGameState = (
   }
 
   // 6. Arrival Logic (Impacts)
-  const nodeUpdates = new Map<string, { count: number, owner: PlayerColor, prevOwner: PlayerColor, captureProgress: number }>();
+  const nodeUpdates = new Map<string, { count: number, owner: PlayerColor, prevOwner: PlayerColor, captureProgress: number, type: NodeType }>();
   
   const getLatestNodeState = (id: string) => {
     if (nodeUpdates.has(id)) return nodeUpdates.get(id)!;
     const n = newNodes.find(node => node.id === id)!;
-    return { count: n.count, owner: n.owner, prevOwner: n.prevOwner || n.owner, captureProgress: n.captureProgress };
+    return { count: n.count, owner: n.owner, prevOwner: n.prevOwner || n.owner, captureProgress: n.captureProgress, type: n.type };
   };
 
   newPayloads.forEach(p => {
@@ -288,16 +292,10 @@ export const advanceGameState = (
         const currentState = getLatestNodeState(target.id);
         
         // --- VISUAL EVENT GENERATION ---
-        // Calculate impact angle
         const dx = p.endX - p.startX;
         const dy = p.endY - p.startY;
         const angle = Math.atan2(dy, dx);
         
-        // Calculate force.
-        // Impact should be stronger if node is small, weaker if node is huge.
-        // Base force = 0.5.
-        // Mass = node.count + 50 roughly.
-        // This is purely for the visual wobble.
         const mass = Math.max(20, currentState.count);
         const force = Math.min(1.0, 30 / mass); 
 
@@ -319,14 +317,23 @@ export const advanceGameState = (
           });
         } else {
           // Attack
-          const result = currentState.count - p.count;
+          // FORTRESS BONUS: Incoming enemies do half damage (require 2 to kill 1)
+          let incomingDamage = p.count;
+          
+          if (currentState.type === 'FORTRESS') {
+              incomingDamage = incomingDamage * 0.5;
+          }
+
+          const result = currentState.count - incomingDamage;
+          
           if (result < 0) {
             // Captured!
             nodeUpdates.set(target.id, { 
                 count: Math.abs(result), 
                 owner: p.owner,
                 prevOwner: currentState.owner, // Store old owner for animation
-                captureProgress: 0 // Reset animation
+                captureProgress: 0, // Reset animation
+                type: currentState.type // Preserve type
             });
           } else {
             // Damaged
