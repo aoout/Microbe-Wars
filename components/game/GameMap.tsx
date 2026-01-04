@@ -172,7 +172,7 @@ const GameMap: React.FC<GameMapProps> = ({
   onAttack, 
   nextCurrentTime, 
   isAutoPilot, 
-  onToggleAutoPilot,
+  onToggleAutoPilot, 
   isPaused, 
   onTogglePause,
   tutorialTargetId,
@@ -189,11 +189,49 @@ const GameMap: React.FC<GameMapProps> = ({
   const svgRef = useRef<SVGSVGElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
+  // Resize / Layout State
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [layoutDims, setLayoutDims] = useState({ width: GAME_WIDTH, height: GAME_HEIGHT });
+
   const latestWorldRef = useRef(world);
 
   // Visual Physics Refs
   const nodePhysicsMap = useRef<Map<string, NodePhysicsState>>(new Map());
   const splashParticles = useRef<SplashParticle[]>([]);
+
+  // --- Layout Resize Logic ---
+  useEffect(() => {
+    const handleResize = () => {
+      if (!containerRef.current) return;
+      // Use offsetWidth/Height of the parent container to determine available space
+      // We assume GameMap is wrapped in a flex-1 div
+      const parent = containerRef.current;
+      const { clientWidth: pw, clientHeight: ph } = parent;
+      
+      const targetRatio = GAME_WIDTH / GAME_HEIGHT;
+      const parentRatio = pw / ph;
+
+      let w, h;
+      if (parentRatio > targetRatio) {
+         // Parent is wider than game -> constraint is height
+         h = ph;
+         w = ph * targetRatio;
+      } else {
+         // Parent is taller than game -> constraint is width
+         w = pw;
+         h = pw / targetRatio;
+      }
+      
+      setLayoutDims({ width: w, height: h });
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    // Safety check after mount
+    setTimeout(handleResize, 100);
+
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     latestWorldRef.current = world;
@@ -215,13 +253,11 @@ const GameMap: React.FC<GameMapProps> = ({
             const phys = nodePhysicsMap.current.get(node.id)!;
             
             // Impact pushes the node slightly in direction of travel
-            // ADJUSTMENT: Reduced to 3% of original intensity
             const push = evt.force * 6.0 * 0.03; 
             phys.velocityX += Math.cos(evt.angle) * push;
             phys.velocityY += Math.sin(evt.angle) * push;
 
             // 2. Trigger Splash Particles (Cell Fluid)
-            // ADJUSTMENT: Reduced to 8% of original intensity
             const splashCount = Math.random() < 0.56 ? 1 : 0;
             
             const hitX = node.x - Math.cos(evt.angle) * (node.radius + 5);
@@ -541,443 +577,460 @@ const GameMap: React.FC<GameMapProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center overflow-hidden select-none z-10">
+    <div 
+        ref={containerRef}
+        className="relative w-full h-full flex items-center justify-center overflow-hidden select-none z-10 bg-transparent"
+    >
       
-      {/* 1. Canvas Layer */}
-      <canvas
-        ref={canvasRef}
-        width={GAME_WIDTH}
-        height={GAME_HEIGHT}
-        className="absolute top-0 left-0 w-full h-full max-w-screen-xl max-h-screen object-contain z-20 pointer-events-none"
-      />
-
-      {/* 2. SVG Layer */}
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${GAME_WIDTH} ${GAME_HEIGHT}`}
-        className="w-full h-full max-w-screen-xl max-h-screen object-contain drop-shadow-2xl z-10"
-        onClick={handleBgClick}
-        onMouseMove={handleSvgMouseMove}
-        onMouseUp={handleSvgMouseUp}
+      {/* 
+        Game Scaling Container 
+        This div forces the 1200x800 aspect ratio and centers itself in the parent.
+        Both Canvas and SVG inherit these exact dimensions, ensuring pixel-perfect overlap.
+      */}
+      <div 
+        style={{ 
+            width: layoutDims.width, 
+            height: layoutDims.height 
+        }}
+        className="relative shadow-2xl transition-all duration-75 ease-linear"
       >
-        <defs>
-          <pattern id="organic-grid" width="100" height="100" patternUnits="userSpaceOnUse">
-             <circle cx="20" cy="20" r="1.5" fill="#334155" opacity="0.3" />
-             <circle cx="70" cy="60" r="1" fill="#334155" opacity="0.2" />
-          </pattern>
 
-          {/* New Textures for Special Nodes */}
-          <pattern id="hex-plate" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-             <rect width="10" height="10" fill="none" />
-             <path d="M 0 5 L 10 5 M 5 0 L 5 10" stroke="white" strokeWidth="1" opacity="0.15" />
-          </pattern>
-          
-          <pattern id="bio-goo" width="6" height="6" patternUnits="userSpaceOnUse">
-             <circle cx="2" cy="2" r="1.5" fill="black" opacity="0.2" />
-             <circle cx="5" cy="5" r="1" fill="black" opacity="0.1" />
-          </pattern>
-          
-          {/* Organic Cell Gradients & Ink Transitions */}
-          {world.nodes.map(node => (
-             <React.Fragment key={`grad-${node.id}`}>
-                 {/* Standard Body Gradient */}
-                 <radialGradient id={`cell-body-${node.owner}`} cx="50%" cy="50%" r="50%" fx="30%" fy="30%">
-                    <stop offset="0%" stopColor="#ffffff" stopOpacity="0.1" />
-                    <stop offset="40%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.3" />
-                    <stop offset="85%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.8" />
-                    <stop offset="100%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.2" />
-                 </radialGradient>
+          {/* 1. Canvas Layer */}
+          <canvas
+            ref={canvasRef}
+            width={GAME_WIDTH}
+            height={GAME_HEIGHT}
+            className="absolute inset-0 w-full h-full z-20 pointer-events-none"
+          />
 
-                 {/* Ink Spread Transition Gradient */}
-                 <radialGradient id={`ink-transition-${node.id}`} cx="50%" cy="50%" r="50%">
-                    <stop offset={`${Math.max(0, node.captureProgress * 100 - 20)}%`} stopColor={COLOR_MAP[node.owner]} />
-                    <stop offset={`${Math.min(100, node.captureProgress * 100)}%`} stopColor={COLOR_MAP[node.owner]} stopOpacity="0.8" />
-                    <stop offset={`${Math.min(100, node.captureProgress * 100 + 10)}%`} stopColor={COLOR_MAP[node.prevOwner || node.owner]} />
-                 </radialGradient>
-             </React.Fragment>
-          ))}
-          
-          <radialGradient id="cell-core-general" cx="50%" cy="50%" r="50%">
-               <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
-               <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
-          </radialGradient>
-          
-          <filter id="glow-soft">
-            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-            <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
+          {/* 2. SVG Layer */}
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${GAME_WIDTH} ${GAME_HEIGHT}`}
+            preserveAspectRatio="none"
+            className="absolute inset-0 w-full h-full z-10"
+            onClick={handleBgClick}
+            onMouseMove={handleSvgMouseMove}
+            onMouseUp={handleSvgMouseUp}
+          >
+            <defs>
+              <pattern id="organic-grid" width="100" height="100" patternUnits="userSpaceOnUse">
+                <circle cx="20" cy="20" r="1.5" fill="#334155" opacity="0.3" />
+                <circle cx="70" cy="60" r="1" fill="#334155" opacity="0.2" />
+              </pattern>
 
-          <filter id="glow-strong">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
-            <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
-        </defs>
+              {/* New Textures for Special Nodes */}
+              <pattern id="hex-plate" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="10" height="10" fill="none" />
+                <path d="M 0 5 L 10 5 M 5 0 L 5 10" stroke="white" strokeWidth="1" opacity="0.15" />
+              </pattern>
+              
+              <pattern id="bio-goo" width="6" height="6" patternUnits="userSpaceOnUse">
+                <circle cx="2" cy="2" r="1.5" fill="black" opacity="0.2" />
+                <circle cx="5" cy="5" r="1" fill="black" opacity="0.1" />
+              </pattern>
+              
+              {/* Organic Cell Gradients & Ink Transitions */}
+              {world.nodes.map(node => (
+                <React.Fragment key={`grad-${node.id}`}>
+                    {/* Standard Body Gradient */}
+                    <radialGradient id={`cell-body-${node.owner}`} cx="50%" cy="50%" r="50%" fx="30%" fy="30%">
+                        <stop offset="0%" stopColor="#ffffff" stopOpacity="0.1" />
+                        <stop offset="40%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.3" />
+                        <stop offset="85%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.8" />
+                        <stop offset="100%" stopColor={COLOR_MAP[node.owner]} stopOpacity="0.2" />
+                    </radialGradient>
 
-        <rect width="100%" height="100%" fill="url(#organic-grid)" />
+                    {/* Ink Spread Transition Gradient */}
+                    <radialGradient id={`ink-transition-${node.id}`} cx="50%" cy="50%" r="50%">
+                        <stop offset={`${Math.max(0, node.captureProgress * 100 - 20)}%`} stopColor={COLOR_MAP[node.owner]} />
+                        <stop offset={`${Math.min(100, node.captureProgress * 100)}%`} stopColor={COLOR_MAP[node.owner]} stopOpacity="0.8" />
+                        <stop offset={`${Math.min(100, node.captureProgress * 100 + 10)}%`} stopColor={COLOR_MAP[node.prevOwner || node.owner]} />
+                    </radialGradient>
+                </React.Fragment>
+              ))}
+              
+              <radialGradient id="cell-core-general" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                  <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+              </radialGradient>
+              
+              <filter id="glow-soft">
+                <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                <feMerge>
+                    <feMergeNode in="coloredBlur"/>
+                    <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
 
-        <EdgesLayer 
-          edges={world.edges} 
-          nodes={world.nodes} 
-          selectedNodeId={selectedNodeId} 
-        />
+              <filter id="glow-strong">
+                <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                <feMerge>
+                    <feMergeNode in="coloredBlur"/>
+                    <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+            </defs>
 
-        {/* Drag Line Path */}
-        {dragPath.length > 0 && dragCurrentPos && (
-            <g className="pointer-events-none">
-                {/* 1. Established Chain (Solid/Dashed Lines between nodes) */}
-                {dragPath.map((id, index) => {
-                    if (index === dragPath.length - 1) return null; // Skip last one, handled by currentPos
-                    const cur = getNodePos(id);
-                    const next = getNodePos(dragPath[index+1]);
-                    return (
-                        <line
-                            key={`drag-seg-${index}`}
-                            x1={cur.x}
-                            y1={cur.y}
-                            x2={next.x}
-                            y2={next.y}
-                            stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
-                            strokeWidth="4"
-                            strokeLinecap="round"
-                            opacity="0.8"
-                        />
-                    );
-                })}
-                
-                {/* 2. Active Drag Line (Last Node to Mouse) */}
-                {(() => {
-                    const lastPos = getNodePos(dragPath[dragPath.length - 1]);
-                    return (
-                        <line
-                            x1={lastPos.x}
-                            y1={lastPos.y}
-                            x2={dragCurrentPos.x}
-                            y2={dragCurrentPos.y}
-                            stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
-                            strokeWidth="3"
-                            strokeDasharray="8 6"
-                            strokeLinecap="round"
-                            opacity="0.6"
-                        />
-                    );
-                })()}
-            </g>
-        )}
+            <rect width="100%" height="100%" fill="url(#organic-grid)" />
 
-        <g>
-          {world.nodes.map((node, index) => {
-            const isSelected = selectedNodeId === node.id;
-            const isHover = hoverNodeId === node.id;
-            // Node is in the current drag path
-            const isInDragPath = dragPath.includes(node.id);
-            // Is this the specific node we started dragging from?
-            const isDragStart = dragPath.length > 0 && dragPath[0] === node.id;
-            
-            const isTutorialTarget = tutorialTargetId === node.id;
-            
-            const baseRadius = getDynamicRadius(node.count);
-            // Hover/Selection Pop
-            const displayRadius = (isHover || isInDragPath) ? baseRadius * 1.1 : baseRadius;
-            
-            const color = COLOR_MAP[node.owner];
-            
-            // Interaction Check (Targetable logic for click-selection mode)
-            let isTargetable = false;
-            // If dragging, we handle targeting in mouseEnter logic, not visual check here
-            if (selectedNodeId && selectedNodeId !== node.id) {
-               isTargetable = world.edges.some(e => 
-                (e.source === selectedNodeId && e.target === node.id) ||
-                (e.source === node.id && e.target === selectedNodeId)
-              );
-            }
+            <EdgesLayer 
+              edges={world.edges} 
+              nodes={world.nodes} 
+              selectedNodeId={selectedNodeId} 
+            />
 
-            // Initialization for physics map if missing
-            if (!nodePhysicsMap.current.has(node.id)) {
-                nodePhysicsMap.current.set(node.id, {
-                    id: node.id, x: node.x, y: node.y, offsetX: 0, offsetY: 0, velocityX: 0, velocityY: 0
-                });
-            }
-
-            // Determine Shape Elements
-            let shapeElement = null;
-            let membraneElement = null;
-            let nucleusElement = null;
-            let selectionElement = null;
-
-            if (node.type === 'FORTRESS') {
-               // --- FORTRESS: Heavy Industrial Bunker ---
-               const r = displayRadius * 0.95;
-               const fortressPath = getFortressPath(node.x, node.y, r);
-               const platingPath = getFortressPath(node.x, node.y, r * 0.7);
-
-               shapeElement = (
-                   <g>
-                      {/* Heavy Plating (Main Body) with Hex Texture */}
-                      <path
-                        d={fortressPath}
-                        fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color}
-                        fillOpacity={0.8}
-                        stroke={color} strokeWidth={1}
-                      />
-                      <path d={fortressPath} fill="url(#hex-plate)" opacity={0.4} />
-
-                      {/* Inner Raised Platform */}
-                      <path
-                        d={platingPath}
-                        fill={color} fillOpacity={0.3}
-                        stroke={color} strokeWidth={2}
-                      />
-                      
-                      {/* Connection bolts */}
-                      <circle cx={node.x - r*0.7} cy={node.y - r*0.7} r={2} fill="white" opacity={0.8} />
-                      <circle cx={node.x + r*0.7} cy={node.y - r*0.7} r={2} fill="white" opacity={0.8} />
-                      <circle cx={node.x - r*0.7} cy={node.y + r*0.7} r={2} fill="white" opacity={0.8} />
-                      <circle cx={node.x + r*0.7} cy={node.y + r*0.7} r={2} fill="white" opacity={0.8} />
-                   </g>
-               );
-               
-               // Outer Shield Rings (Counter Rotating)
-               membraneElement = (
-                   <g>
-                       <g style={{ transformOrigin: `${node.x}px ${node.y}px` }} className="animate-[spin_10s_linear_infinite]">
-                            <path
-                                d={getFortressPath(node.x, node.y, r + 4)}
-                                fill="none" stroke={color} strokeWidth={1} strokeDasharray="10 10" strokeOpacity={0.6}
+            {/* Drag Line Path */}
+            {dragPath.length > 0 && dragCurrentPos && (
+                <g className="pointer-events-none">
+                    {/* 1. Established Chain (Solid/Dashed Lines between nodes) */}
+                    {dragPath.map((id, index) => {
+                        if (index === dragPath.length - 1) return null; // Skip last one, handled by currentPos
+                        const cur = getNodePos(id);
+                        const next = getNodePos(dragPath[index+1]);
+                        return (
+                            <line
+                                key={`drag-seg-${index}`}
+                                x1={cur.x}
+                                y1={cur.y}
+                                x2={next.x}
+                                y2={next.y}
+                                stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
+                                strokeWidth="4"
+                                strokeLinecap="round"
+                                opacity="0.8"
                             />
-                       </g>
-                       <g style={{ transformOrigin: `${node.x}px ${node.y}px` }} className="animate-[spin_15s_linear_reverse_infinite]">
-                            <path
-                                d={getFortressPath(node.x, node.y, r + 8)}
-                                fill="none" stroke={color} strokeWidth={2} strokeDasharray="4 20" strokeOpacity={0.4}
+                        );
+                    })}
+                    
+                    {/* 2. Active Drag Line (Last Node to Mouse) */}
+                    {(() => {
+                        const lastPos = getNodePos(dragPath[dragPath.length - 1]);
+                        return (
+                            <line
+                                x1={lastPos.x}
+                                y1={lastPos.y}
+                                x2={dragCurrentPos.x}
+                                y2={dragCurrentPos.y}
+                                stroke={COLOR_MAP[playerColor as keyof typeof COLOR_MAP] || '#fff'}
+                                strokeWidth="3"
+                                strokeDasharray="8 6"
+                                strokeLinecap="round"
+                                opacity="0.6"
                             />
-                       </g>
-                   </g>
-               );
-
-               // Core Reactor (Stable Energy)
-               nucleusElement = (
-                   <rect
-                     x={node.x - r * 0.25}
-                     y={node.y - r * 0.25}
-                     width={r * 0.5}
-                     height={r * 0.5}
-                     fill="white"
-                     filter="url(#glow-strong)"
-                     className="animate-[pulse_4s_ease-in-out_infinite]"
-                   />
-               );
-
-               // Selection Box matches Octagon roughly
-               selectionElement = (
-                   <path
-                     d={getFortressPath(node.x, node.y, r + 12)}
-                     fill="none"
-                     stroke={isSelected || isInDragPath ? '#fff' : color}
-                     strokeWidth={2}
-                     strokeOpacity={0.9}
-                     strokeDasharray="4 4"
-                     className="animate-[pulse_2s_linear_infinite]"
-                   />
-               );
-
-            } else if (node.type === 'HIVE') {
-               // --- HIVE: Zerg-like Organic Hatchery ---
-               const r = displayRadius * 1.3; 
-               
-               // Create 3 symmetric claws/petals
-               const claw0 = getHiveClawPath(node.x, node.y, r, 0);
-               const claw1 = getHiveClawPath(node.x, node.y, r, 120);
-               const claw2 = getHiveClawPath(node.x, node.y, r, 240);
-
-               shapeElement = (
-                   <g className="animate-[spin_12s_linear_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
-                       {/* Base Pool */}
-                       <circle cx={node.x} cy={node.y} r={r * 0.5} fill={color} fillOpacity={0.4} />
-                       
-                       {/* 3 Rotational Claws */}
-                       <path d={claw0} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
-                       <path d={claw1} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
-                       <path d={claw2} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
-                       
-                       {/* Vein Texture Overlay */}
-                       <path d={claw0} fill="url(#bio-goo)" opacity={0.3} />
-                       <path d={claw1} fill="url(#bio-goo)" opacity={0.3} />
-                       <path d={claw2} fill="url(#bio-goo)" opacity={0.3} />
-                   </g>
-               );
-
-               // Outer Membrane Ring (Stable rotation)
-               membraneElement = (
-                   <g className="animate-[spin_8s_linear_reverse_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
-                        <circle cx={node.x} cy={node.y} r={r * 0.8} fill="none" stroke={color} strokeWidth={1} strokeOpacity={0.3} strokeDasharray="2 4" />
-                   </g>
-               );
-
-               // Pulsing Heart Core
-               nucleusElement = (
-                   <g>
-                        {/* Glow */}
-                       <circle
-                         cx={node.x} cy={node.y} r={r * 0.3}
-                         fill={color}
-                         opacity={0.4}
-                         filter="url(#glow-strong)"
-                         className="animate-[pulse_2s_ease-in-out_infinite]"
-                       />
-                       {/* Solid Core */}
-                       <circle
-                         cx={node.x} cy={node.y} r={r * 0.15}
-                         fill="white"
-                         className="animate-[pulse_1s_ease-in-out_infinite]"
-                       />
-                       
-                       {/* Orbiting Spores */}
-                       <g className="animate-[spin_3s_linear_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
-                            <circle cx={node.x} cy={node.y - r} r={3} fill={color} filter="url(#glow-soft)" />
-                            <circle cx={node.x + r*0.866} cy={node.y + r*0.5} r={2} fill={color} filter="url(#glow-soft)" />
-                            <circle cx={node.x - r*0.866} cy={node.y + r*0.5} r={2.5} fill={color} filter="url(#glow-soft)" />
-                       </g>
-                   </g>
-               );
-
-               selectionElement = (
-                   <circle
-                     cx={node.x} cy={node.y} r={r + 8}
-                     fill="none"
-                     stroke={isSelected || isInDragPath ? '#fff' : color}
-                     strokeWidth={2}
-                     strokeOpacity={0.9}
-                     strokeDasharray="2 3"
-                     className="animate-[spin_20s_linear_infinite]"
-                     style={{ transformOrigin: `${node.x}px ${node.y}px` }}
-                   />
-               );
-
-            } else {
-               // --- DEFAULT CELL ---
-               shapeElement = (
-                    <circle
-                      cx={node.x} cy={node.y}
-                      r={displayRadius}
-                      fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : `url(#cell-body-${node.owner})`}
-                      className="transition-all duration-300"
-                    />
-               );
-               membraneElement = (
-                    <circle
-                      cx={node.x} cy={node.y}
-                      r={displayRadius}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth={2}
-                      strokeOpacity={0.6}
-                      filter="url(#glow-soft)"
-                    />
-               );
-               nucleusElement = (
-                    <circle
-                      cx={node.x} cy={node.y}
-                      r={displayRadius * 0.4}
-                      fill="url(#cell-core-general)"
-                      opacity={0.6}
-                      filter="url(#glow-soft)"
-                      className="animate-pulse"
-                    />
-               );
-               selectionElement = (
-                   <circle
-                     cx={node.x} cy={node.y}
-                     r={displayRadius + 8}
-                     fill="none"
-                     stroke={isSelected || isInDragPath ? '#fff' : color}
-                     strokeWidth={1.5}
-                     strokeOpacity={0.8}
-                     strokeDasharray="2 4"
-                     className="animate-[spin_4s_linear_infinite]"
-                     style={{ transformOrigin: `${node.x}px ${node.y}px` }}
-                   />
-               );
-            }
-
-
-            return (
-              <g
-                key={node.id}
-                id={`node-group-${node.id}`} // Hook for direct DOM manipulation
-                style={{ 
-                    transformOrigin: `${node.x}px ${node.y}px`,
-                    animationDelay: `${index * -0.5}s` // Staggered jitter
-                }}
-                className="cursor-pointer"
-                onMouseDown={(e) => handleNodeMouseDown(node, e)}
-                onMouseEnter={() => handleNodeMouseEnter(node)}
-                onMouseLeave={() => setHoverNodeId(null)}
-                onMouseUp={(e) => handleNodeMouseUp(node, e)}
-                onClick={(e) => { e.stopPropagation(); }} // Click handled in MouseUp for unifying logic
-              >
-                
-                {/* 1. Tutorial Reticle (Underlay) */}
-                {isTutorialTarget && (
-                  <g className="pointer-events-none animate-spin-slow" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
-                     <circle cx={node.x} cy={node.y} r={displayRadius + 20} fill="none" stroke="#eab308" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
-                     <path d={`M ${node.x} ${node.y - displayRadius - 25} L ${node.x} ${node.y - displayRadius - 15}`} stroke="#eab308" strokeWidth="2" />
-                     <path d={`M ${node.x} ${node.y + displayRadius + 25} L ${node.x} ${node.y + displayRadius + 15}`} stroke="#eab308" strokeWidth="2" />
-                  </g>
-                )}
-
-                {/* 2. Selection / Target Ring */}
-                {(isSelected || isInDragPath || (isTargetable && isHover)) && selectionElement}
-                
-                {/* Drag Path Sequence Number (Optional: Shows 1, 2, 3...) */}
-                {isInDragPath && (
-                     <circle cx={node.x} cy={node.y} r={displayRadius + 12} stroke="white" strokeWidth="1" opacity="0.5" fill="none" />
-                )}
-
-                {/* 3. The Cell (Animated Blob) */}
-                {/* REMOVED animate-blob from parent G to fix wobble/translation issues */}
-                <g style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
-                    
-                    {/* Main Fill */}
-                    {shapeElement}
-                    
-                    {/* Membrane Edge */}
-                    {membraneElement}
-
-                    {/* Nucleus (Core) */}
-                    {nucleusElement}
-
-                    {/* No More Icons */}
+                        );
+                    })()}
                 </g>
+            )}
 
-                {/* 4. Data Text (Centered directly on node) */}
-                <text
-                  x={node.x}
-                  y={node.y}
-                  dy=".35em"
-                  textAnchor="middle"
-                  className="font-mono-lab font-bold fill-white pointer-events-none drop-shadow-md select-none"
-                  style={{ 
-                    fontSize: Math.max(10, displayRadius * 0.5),
-                    textShadow: `0 0 4px ${color}`
-                  }}
-                >
-                  {Math.floor(node.count)}
-                </text>
+            <g>
+              {world.nodes.map((node, index) => {
+                const isSelected = selectedNodeId === node.id;
+                const isHover = hoverNodeId === node.id;
+                // Node is in the current drag path
+                const isInDragPath = dragPath.includes(node.id);
+                // Is this the specific node we started dragging from?
+                const isDragStart = dragPath.length > 0 && dragPath[0] === node.id;
+                
+                const isTutorialTarget = tutorialTargetId === node.id;
+                
+                const baseRadius = getDynamicRadius(node.count);
+                // Hover/Selection Pop
+                const displayRadius = (isHover || isInDragPath) ? baseRadius * 1.1 : baseRadius;
+                
+                const color = COLOR_MAP[node.owner];
+                
+                // Interaction Check (Targetable logic for click-selection mode)
+                let isTargetable = false;
+                // If dragging, we handle targeting in mouseEnter logic, not visual check here
+                if (selectedNodeId && selectedNodeId !== node.id) {
+                  isTargetable = world.edges.some(e => 
+                    (e.source === selectedNodeId && e.target === node.id) ||
+                    (e.source === node.id && e.target === selectedNodeId)
+                  );
+                }
 
-              </g>
-            );
-          })}
-        </g>
-         
-      </svg>
+                // Initialization for physics map if missing
+                if (!nodePhysicsMap.current.has(node.id)) {
+                    nodePhysicsMap.current.set(node.id, {
+                        id: node.id, x: node.x, y: node.y, offsetX: 0, offsetY: 0, velocityX: 0, velocityY: 0
+                    });
+                }
+
+                // Determine Shape Elements
+                let shapeElement = null;
+                let membraneElement = null;
+                let nucleusElement = null;
+                let selectionElement = null;
+
+                if (node.type === 'FORTRESS') {
+                  // --- FORTRESS: Heavy Industrial Bunker ---
+                  const r = displayRadius * 0.95;
+                  const fortressPath = getFortressPath(node.x, node.y, r);
+                  const platingPath = getFortressPath(node.x, node.y, r * 0.7);
+
+                  shapeElement = (
+                      <g>
+                          {/* Heavy Plating (Main Body) with Hex Texture */}
+                          <path
+                            d={fortressPath}
+                            fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color}
+                            fillOpacity={0.8}
+                            stroke={color} strokeWidth={1}
+                          />
+                          <path d={fortressPath} fill="url(#hex-plate)" opacity={0.4} />
+
+                          {/* Inner Raised Platform */}
+                          <path
+                            d={platingPath}
+                            fill={color} fillOpacity={0.3}
+                            stroke={color} strokeWidth={2}
+                          />
+                          
+                          {/* Connection bolts */}
+                          <circle cx={node.x - r*0.7} cy={node.y - r*0.7} r={2} fill="white" opacity={0.8} />
+                          <circle cx={node.x + r*0.7} cy={node.y - r*0.7} r={2} fill="white" opacity={0.8} />
+                          <circle cx={node.x - r*0.7} cy={node.y + r*0.7} r={2} fill="white" opacity={0.8} />
+                          <circle cx={node.x + r*0.7} cy={node.y + r*0.7} r={2} fill="white" opacity={0.8} />
+                      </g>
+                  );
+                  
+                  // Outer Shield Rings (Counter Rotating)
+                  membraneElement = (
+                      <g>
+                          <g style={{ transformOrigin: `${node.x}px ${node.y}px` }} className="animate-[spin_10s_linear_infinite]">
+                                <path
+                                    d={getFortressPath(node.x, node.y, r + 4)}
+                                    fill="none" stroke={color} strokeWidth={1} strokeDasharray="10 10" strokeOpacity={0.6}
+                                />
+                          </g>
+                          <g style={{ transformOrigin: `${node.x}px ${node.y}px` }} className="animate-[spin_15s_linear_reverse_infinite]">
+                                <path
+                                    d={getFortressPath(node.x, node.y, r + 8)}
+                                    fill="none" stroke={color} strokeWidth={2} strokeDasharray="4 20" strokeOpacity={0.4}
+                                />
+                          </g>
+                      </g>
+                  );
+
+                  // Core Reactor (Stable Energy)
+                  nucleusElement = (
+                      <rect
+                        x={node.x - r * 0.25}
+                        y={node.y - r * 0.25}
+                        width={r * 0.5}
+                        height={r * 0.5}
+                        fill="white"
+                        filter="url(#glow-strong)"
+                        className="animate-[pulse_4s_ease-in-out_infinite]"
+                      />
+                  );
+
+                  // Selection Box matches Octagon roughly
+                  selectionElement = (
+                      <path
+                        d={getFortressPath(node.x, node.y, r + 12)}
+                        fill="none"
+                        stroke={isSelected || isInDragPath ? '#fff' : color}
+                        strokeWidth={2}
+                        strokeOpacity={0.9}
+                        strokeDasharray="4 4"
+                        className="animate-[pulse_2s_linear_infinite]"
+                      />
+                  );
+
+                } else if (node.type === 'HIVE') {
+                  // --- HIVE: Zerg-like Organic Hatchery ---
+                  const r = displayRadius * 1.3; 
+                  
+                  // Create 3 symmetric claws/petals
+                  const claw0 = getHiveClawPath(node.x, node.y, r, 0);
+                  const claw1 = getHiveClawPath(node.x, node.y, r, 120);
+                  const claw2 = getHiveClawPath(node.x, node.y, r, 240);
+
+                  shapeElement = (
+                      <g className="animate-[spin_12s_linear_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                          {/* Base Pool */}
+                          <circle cx={node.x} cy={node.y} r={r * 0.5} fill={color} fillOpacity={0.4} />
+                          
+                          {/* 3 Rotational Claws */}
+                          <path d={claw0} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
+                          <path d={claw1} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
+                          <path d={claw2} fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : color} fillOpacity={0.8} />
+                          
+                          {/* Vein Texture Overlay */}
+                          <path d={claw0} fill="url(#bio-goo)" opacity={0.3} />
+                          <path d={claw1} fill="url(#bio-goo)" opacity={0.3} />
+                          <path d={claw2} fill="url(#bio-goo)" opacity={0.3} />
+                      </g>
+                  );
+
+                  // Outer Membrane Ring (Stable rotation)
+                  membraneElement = (
+                      <g className="animate-[spin_8s_linear_reverse_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                            <circle cx={node.x} cy={node.y} r={r * 0.8} fill="none" stroke={color} strokeWidth={1} strokeOpacity={0.3} strokeDasharray="2 4" />
+                      </g>
+                  );
+
+                  // Pulsing Heart Core
+                  nucleusElement = (
+                      <g>
+                            {/* Glow */}
+                          <circle
+                            cx={node.x} cy={node.y} r={r * 0.3}
+                            fill={color}
+                            opacity={0.4}
+                            filter="url(#glow-strong)"
+                            className="animate-[pulse_2s_ease-in-out_infinite]"
+                          />
+                          {/* Solid Core */}
+                          <circle
+                            cx={node.x} cy={node.y} r={r * 0.15}
+                            fill="white"
+                            className="animate-[pulse_1s_ease-in-out_infinite]"
+                          />
+                          
+                          {/* Orbiting Spores */}
+                          <g className="animate-[spin_3s_linear_infinite]" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                                <circle cx={node.x} cy={node.y - r} r={3} fill={color} filter="url(#glow-soft)" />
+                                <circle cx={node.x + r*0.866} cy={node.y + r*0.5} r={2} fill={color} filter="url(#glow-soft)" />
+                                <circle cx={node.x - r*0.866} cy={node.y + r*0.5} r={2.5} fill={color} filter="url(#glow-soft)" />
+                          </g>
+                      </g>
+                  );
+
+                  selectionElement = (
+                      <circle
+                        cx={node.x} cy={node.y} r={r + 8}
+                        fill="none"
+                        stroke={isSelected || isInDragPath ? '#fff' : color}
+                        strokeWidth={2}
+                        strokeOpacity={0.9}
+                        strokeDasharray="2 3"
+                        className="animate-[spin_20s_linear_infinite]"
+                        style={{ transformOrigin: `${node.x}px ${node.y}px` }}
+                      />
+                  );
+
+                } else {
+                  // --- DEFAULT CELL ---
+                  shapeElement = (
+                        <circle
+                          cx={node.x} cy={node.y}
+                          r={displayRadius}
+                          fill={node.captureProgress < 1 ? `url(#ink-transition-${node.id})` : `url(#cell-body-${node.owner})`}
+                          className="transition-all duration-300"
+                        />
+                  );
+                  membraneElement = (
+                        <circle
+                          cx={node.x} cy={node.y}
+                          r={displayRadius}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth={2}
+                          strokeOpacity={0.6}
+                          filter="url(#glow-soft)"
+                        />
+                  );
+                  nucleusElement = (
+                        <circle
+                          cx={node.x} cy={node.y}
+                          r={displayRadius * 0.4}
+                          fill="url(#cell-core-general)"
+                          opacity={0.6}
+                          filter="url(#glow-soft)"
+                          className="animate-pulse"
+                        />
+                  );
+                  selectionElement = (
+                      <circle
+                        cx={node.x} cy={node.y}
+                        r={displayRadius + 8}
+                        fill="none"
+                        stroke={isSelected || isInDragPath ? '#fff' : color}
+                        strokeWidth={1.5}
+                        strokeOpacity={0.8}
+                        strokeDasharray="2 4"
+                        className="animate-[spin_4s_linear_infinite]"
+                        style={{ transformOrigin: `${node.x}px ${node.y}px` }}
+                      />
+                  );
+                }
+
+
+                return (
+                  <g
+                    key={node.id}
+                    id={`node-group-${node.id}`} // Hook for direct DOM manipulation
+                    style={{ 
+                        transformOrigin: `${node.x}px ${node.y}px`,
+                        animationDelay: `${index * -0.5}s` // Staggered jitter
+                    }}
+                    className="cursor-pointer"
+                    onMouseDown={(e) => handleNodeMouseDown(node, e)}
+                    onMouseEnter={() => handleNodeMouseEnter(node)}
+                    onMouseLeave={() => setHoverNodeId(null)}
+                    onMouseUp={(e) => handleNodeMouseUp(node, e)}
+                    onClick={(e) => { e.stopPropagation(); }} // Click handled in MouseUp for unifying logic
+                  >
+                    
+                    {/* 1. Tutorial Reticle (Underlay) */}
+                    {isTutorialTarget && (
+                      <g className="pointer-events-none animate-spin-slow" style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                        <circle cx={node.x} cy={node.y} r={displayRadius + 20} fill="none" stroke="#eab308" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
+                        <path d={`M ${node.x} ${node.y - displayRadius - 25} L ${node.x} ${node.y - displayRadius - 15}`} stroke="#eab308" strokeWidth="2" />
+                        <path d={`M ${node.x} ${node.y + displayRadius + 25} L ${node.x} ${node.y + displayRadius + 15}`} stroke="#eab308" strokeWidth="2" />
+                      </g>
+                    )}
+
+                    {/* 2. Selection / Target Ring */}
+                    {(isSelected || isInDragPath || (isTargetable && isHover)) && selectionElement}
+                    
+                    {/* Drag Path Sequence Number (Optional: Shows 1, 2, 3...) */}
+                    {isInDragPath && (
+                        <circle cx={node.x} cy={node.y} r={displayRadius + 12} stroke="white" strokeWidth="1" opacity="0.5" fill="none" />
+                    )}
+
+                    {/* 3. The Cell (Animated Blob) */}
+                    <g style={{ transformOrigin: `${node.x}px ${node.y}px` }}>
+                        
+                        {/* Main Fill */}
+                        {shapeElement}
+                        
+                        {/* Membrane Edge */}
+                        {membraneElement}
+
+                        {/* Nucleus (Core) */}
+                        {nucleusElement}
+
+                        {/* No More Icons */}
+                    </g>
+
+                    {/* 4. Data Text (Centered directly on node) */}
+                    <text
+                      x={node.x}
+                      y={node.y}
+                      dy=".35em"
+                      textAnchor="middle"
+                      className="font-mono-lab font-bold fill-white pointer-events-none drop-shadow-md select-none"
+                      style={{ 
+                        fontSize: Math.max(10, displayRadius * 0.5),
+                        textShadow: `0 0 4px ${color}`
+                      }}
+                    >
+                      {Math.floor(node.count)}
+                    </text>
+
+                  </g>
+                );
+              })}
+            </g>
+            
+          </svg>
+      </div>
       
-      {/* HUD - Timer */}
+      {/* HUD - Timer (Positioned relative to the viewport/root div) */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none opacity-80">
          <div className="flex items-center gap-2 bg-slate-900/50 backdrop-blur-sm px-4 py-1.5 rounded-full border border-slate-700/30">
            <Activity className={`w-3 h-3 ${timeLeft < 10 ? 'text-red-400 animate-pulse' : 'text-slate-400'}`} />
@@ -987,7 +1040,7 @@ const GameMap: React.FC<GameMapProps> = ({
          </div>
       </div>
 
-      {/* HUD - Control Panel */}
+      {/* HUD - Control Panel (Positioned relative to the viewport/root div) */}
       {!tutorialTargetId && (
         <div className="absolute top-4 right-4 z-50 opacity-90 flex items-center gap-2">
            <button
