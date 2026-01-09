@@ -539,19 +539,30 @@ export const regenerateTopology = (nodes: Node[], currentEdges: Edge[]): Edge[] 
 
 export const calculateGrowthIncrement = (count: number, baseGrowthPerTick: number): number => {
   if (count <= 1) return baseGrowthPerTick;
-  const sizeBonus = Math.log10(count) * 0.5;
-  return baseGrowthPerTick * (1 + sizeBonus);
+  // Rational function: f(x) = x / (x + k)
+  // Approaches +200% bonus (3x total speed) as count -> Infinity
+  // Half-saturation point at 40 units (where bonus is +100%)
+  const bonus = 2.0 * (count / (count + 40));
+  return baseGrowthPerTick * (1 + bonus);
 };
 
 export const calculateUnitSpeed = (nodeCount: number, baseSpeed: number): number => {
   if (nodeCount <= 1) return baseSpeed;
-  const speedMultiplier = 1 + (Math.log(nodeCount) * 0.2);
-  return baseSpeed * speedMultiplier;
+  // Rational function
+  // Approaches +150% bonus (2.5x total speed)
+  // Half-saturation point at 30 units
+  const speedBonus = 1.5 * (nodeCount / (nodeCount + 30));
+  return baseSpeed * (1 + speedBonus);
 };
 
 export const calculateSpawnInterval = (count: number): number => {
   const safeCount = Math.max(1, count);
-  const interval = BASE_SPAWN_INTERVAL_MS / (1 + Math.log(safeCount));
+  // Rational function for Rate Multiplier
+  // Approaches 7x spawn rate (Interval = Base / 7)
+  // Half-saturation point at 20 units
+  const rateMultiplier = 1 + (6 * (safeCount / (safeCount + 20)));
+  
+  const interval = BASE_SPAWN_INTERVAL_MS / rateMultiplier;
   return Math.max(40, interval);
 };
 

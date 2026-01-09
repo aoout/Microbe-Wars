@@ -1,3 +1,4 @@
+
 import { PlayerColor, DifficultyLevel } from './types';
 
 // Visual Colors
@@ -45,7 +46,7 @@ export const AI_ACTION_INTERVAL_BASE = 1000; // Default base, overridden by diff
 // Initial Setup
 export const INITIAL_NEUTRAL_COUNT = 10; // Neutrals are easier to take initially
 export const INITIAL_PLAYER_COUNT = 20;
-export const MAX_CAPACITY_BASE = 150; // Cap to prevent infinite growth
+export const MAX_CAPACITY_BASE = 300; // Increased to 300 to allow new scaling to shine
 
 export const PLAYABLE_COLORS = [
   PlayerColor.RED,
