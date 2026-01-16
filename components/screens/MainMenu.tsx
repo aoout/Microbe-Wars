@@ -1,7 +1,7 @@
 
 import React from 'react';
-import { Activity, Cpu, Globe, Hexagon, Shuffle } from 'lucide-react';
-import { PlayerColor, DifficultyLevel, GameMode } from '../../types';
+import { Activity, Cpu, Globe } from 'lucide-react';
+import { PlayerColor, DifficultyLevel } from '../../types';
 import { COLOR_MAP, PLAYABLE_COLORS, DIFFICULTY_SETTINGS } from '../../constants';
 import MicrobioLogo from '../ui/MicrobioLogo';
 
@@ -10,8 +10,6 @@ interface MainMenuProps {
   setPlayerColor: (color: PlayerColor) => void;
   difficulty: DifficultyLevel;
   setDifficulty: (level: DifficultyLevel) => void;
-  gameMode: GameMode;
-  setGameMode: (mode: GameMode) => void;
   startGame: (forceTutorial?: boolean) => void;
   hasCompletedTutorial: boolean;
 }
@@ -21,8 +19,6 @@ const MainMenu: React.FC<MainMenuProps> = ({
   setPlayerColor,
   difficulty,
   setDifficulty,
-  gameMode,
-  setGameMode,
   startGame,
   hasCompletedTutorial
 }) => {
@@ -48,39 +44,6 @@ const MainMenu: React.FC<MainMenuProps> = ({
              <h2 className="text-2xl font-light tracking-[0.5em] text-slate-400 mb-8 border-b border-slate-800 pb-2">
                 战争
              </h2>
-
-             {/* Game Mode Selection */}
-             <div className="w-full grid grid-cols-2 gap-4 mb-4">
-                 <button
-                    onClick={() => setGameMode('CLASSIC')}
-                    className={`
-                        p-3 rounded-lg border flex flex-col items-center justify-center gap-2 transition-all duration-300 relative overflow-hidden
-                        ${gameMode === 'CLASSIC' 
-                          ? 'bg-blue-900/40 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.2)]' 
-                          : 'bg-slate-900/50 border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300'}
-                    `}
-                 >
-                    <Shuffle size={20} />
-                    <span className="text-xs font-bold uppercase tracking-widest">混沌模式</span>
-                    <span className="text-[9px] opacity-70">随机地图 | 动态连接</span>
-                    {gameMode === 'CLASSIC' && <div className="absolute top-1 right-1 w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>}
-                 </button>
-
-                 <button
-                    onClick={() => setGameMode('HONEYCOMB')}
-                    className={`
-                        p-3 rounded-lg border flex flex-col items-center justify-center gap-2 transition-all duration-300 relative overflow-hidden
-                        ${gameMode === 'HONEYCOMB' 
-                          ? 'bg-amber-900/40 border-amber-500 text-amber-200 shadow-[0_0_15px_rgba(245,158,11,0.2)]' 
-                          : 'bg-slate-900/50 border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300'}
-                    `}
-                 >
-                    <Hexagon size={20} />
-                    <span className="text-xs font-bold uppercase tracking-widest">蜂巢竞技场</span>
-                    <span className="text-[9px] opacity-70">固定网格 | 对称竞技</span>
-                    {gameMode === 'HONEYCOMB' && <div className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full animate-pulse"></div>}
-                 </button>
-             </div>
 
              {/* Color Selection */}
              <div className="w-full bg-slate-900/50 p-4 rounded-lg border border-slate-800 mb-4">

@@ -1,7 +1,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { GameState, GameWorld, PlayerColor, ActiveTransfer, DifficultyLevel, GameMode } from '../types';
-import { generateMap, generateTutorialMap, generateHoneycombMap } from '../services/gameLogic';
+import { GameState, GameWorld, PlayerColor, ActiveTransfer, DifficultyLevel } from '../types';
+import { generateMap, generateTutorialMap } from '../services/gameLogic';
 import { advanceGameState, checkWinCondition } from '../services/gamePhysics';
 import { TICK_RATE_MS, OCEAN_CURRENT_INTERVAL_MS } from '../constants';
 import { TUTORIAL_STEPS } from '../data/tutorialSteps';
@@ -10,7 +10,6 @@ export const useGameEngine = () => {
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [playerColor, setPlayerColor] = useState<PlayerColor>(PlayerColor.BLUE);
   const [difficulty, setDifficulty] = useState<DifficultyLevel>(3);
-  const [gameMode, setGameMode] = useState<GameMode>('CLASSIC');
   const [winner, setWinner] = useState<PlayerColor | null>(null);
   const [isPlayerAutoPilot, setIsPlayerAutoPilot] = useState(false);
   
@@ -49,14 +48,7 @@ export const useGameEngine = () => {
         initialWorld = { nodes, edges, payloads: [], transfers: [], latestEvents: [] };
     } else {
         setGameState('PLAYING');
-        let generated;
-        
-        if (gameMode === 'HONEYCOMB') {
-           generated = generateHoneycombMap(playerColor);
-        } else {
-           generated = generateMap(playerColor);
-        }
-
+        const generated = generateMap(playerColor);
         initialWorld = { nodes: generated.nodes, edges: generated.edges, payloads: [], transfers: [], latestEvents: [] };
     }
     
@@ -69,9 +61,9 @@ export const useGameEngine = () => {
     lastTickTimeRef.current = now;
     lastAITimeRef.current = now;
     
-    nextEventTimeRef.current = gameMode === 'HONEYCOMB' ? now + 999999999 : now + OCEAN_CURRENT_INTERVAL_MS;
+    nextEventTimeRef.current = now + OCEAN_CURRENT_INTERVAL_MS;
     setNextCurrentTime(nextEventTimeRef.current);
-  }, [playerColor, hasCompletedTutorial, gameMode]);
+  }, [playerColor, hasCompletedTutorial]);
 
   const resetGame = useCallback(() => {
     setGameState('MENU');
@@ -302,8 +294,6 @@ export const useGameEngine = () => {
     setPlayerColor,
     difficulty,
     setDifficulty,
-    gameMode,
-    setGameMode,
     winner,
     nextCurrentTime,
     startGame,

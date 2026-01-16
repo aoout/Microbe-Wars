@@ -15,8 +15,6 @@ const App: React.FC = () => {
     setPlayerColor,
     difficulty,
     setDifficulty,
-    gameMode,
-    setGameMode,
     nextCurrentTime,
     startGame,
     resetGame,
@@ -40,8 +38,6 @@ const App: React.FC = () => {
           setPlayerColor={setPlayerColor}
           difficulty={difficulty}
           setDifficulty={setDifficulty}
-          gameMode={gameMode}
-          setGameMode={setGameMode}
           startGame={startGame}
           hasCompletedTutorial={hasCompletedTutorial}
         />
